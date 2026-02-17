@@ -1,0 +1,8 @@
+{
+  "name": "AudiBites",
+  "description": "A professional audio recording and editing suite. Record from system audio or microphone, edit waveforms, and manage your sound library.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ]
+}
