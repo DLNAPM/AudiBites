@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Mic, ListMusic, Settings, Scissors } from 'lucide-react';
+import { Mic, ListMusic, Settings, Scissors, HelpCircle } from 'lucide-react';
 import Recorder from './components/Recorder';
 import Library from './components/Library';
 import Editor from './components/Editor';
+import Help from './components/Help';
 import { AppView, AudioTrack } from './types';
 import { APP_NAME } from './constants';
 
@@ -10,6 +11,7 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.LIBRARY);
   const [tracks, setTracks] = useState<AudioTrack[]>([]);
   const [editingTrack, setEditingTrack] = useState<AudioTrack | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   // Helper to add track
   const addTrack = (blob: Blob, name: string, source: AudioTrack['source']) => {
@@ -74,7 +76,15 @@ const App: React.FC = () => {
           />
         </div>
 
-        <div className="w-full px-2 mt-auto">
+        {/* Bottom Actions */}
+        <div className="w-full px-2 mt-auto space-y-4">
+          <NavButton 
+            active={showHelp} 
+            onClick={() => setShowHelp(true)}
+            icon={<HelpCircle size={24} />}
+            label="Help & Tips"
+          />
+          
           <div className="hidden lg:block p-4 bg-slate-900 rounded-xl border border-slate-800">
             <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">Pro Tip</h4>
             <p className="text-xs text-slate-400">
@@ -117,6 +127,9 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
+
+      {/* Help Modal Overlay */}
+      {showHelp && <Help onClose={() => setShowHelp(false)} />}
     </div>
   );
 };
