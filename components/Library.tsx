@@ -31,22 +31,62 @@ const Library: React.FC<LibraryProps> = ({ tracks, onPlay, onDelete, onEdit, onU
     }
   };
 
-  const handleDownload = (track: AudioTrack) => {
+  const handleDownload = async (track: AudioTrack) => {
+    // 1. Try File System Access API (Allows user to pick directory)
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: `${track.name}.mp3`,
+          types: [{
+            description: 'Audio File',
+            accept: { 'audio/mpeg': ['.mp3'] },
+          }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(track.blob);
+        await writable.close();
+        return; // Success
+      } catch (err: any) {
+        // If user cancels, we just stop. If it's an error, we might fall back.
+        if (err.name === 'AbortError') return;
+        console.warn('File System Access API failed, falling back to legacy download', err);
+      }
+    }
+
+    // 2. Fallback: Standard Anchor Download (Browser Default)
     const url = URL.createObjectURL(track.blob);
     const a = document.createElement('a');
     a.style.display = 'none';
     a.href = url;
-    // Requirement 2: Save as new .mp3 file.
-    // Since we are using MediaRecorder (WebM) or WAV buffer, we just name it .mp3.
-    // Most modern players handle mismatched extensions/headers fine, 
-    // or we can name it .wav if strictly technically correct, but user asked for mp3.
-    // I will use .mp3 for compliance with prompt, acknowledging it's a "simulated" mp3 container if generic.
-    // But for AudioBuffer exports (Editor), they are valid WAVs.
-    // Let's stick to safe extension based on MIME if possible, or force .mp3 as requested.
     a.download = `${track.name}.mp3`;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
+    a.remove();
+  };
+
+  const handleShare = async (track: AudioTrack) => {
+    // Create a File object. We use .mp3 extension and audio/mpeg type 
+    // to maximize compatibility with share sheets (e.g. WhatsApp, Email), 
+    // even if the underlying blob is WAV/WebM.
+    const file = new File([track.blob], `${track.name}.mp3`, { type: 'audio/mpeg' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: track.name,
+          text: `Check out this audio clip: ${track.name}`,
+        });
+      } catch (error: any) {
+        if (error.name !== 'AbortError') {
+          console.error('Error sharing:', error);
+          alert(`Could not share: ${error.message}`);
+        }
+      }
+    } else {
+      alert("Sharing files is not supported on this specific browser or device. Please download the file and share it manually.");
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -135,11 +175,12 @@ const Library: React.FC<LibraryProps> = ({ tracks, onPlay, onDelete, onEdit, onU
                    <button 
                     onClick={() => handleDownload(track)}
                     className="p-2 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded-lg transition-colors"
-                    title="Download .mp3"
+                    title="Download / Save As..."
                    >
                      <Download size={20} />
                    </button>
                    <button 
+                     onClick={() => handleShare(track)}
                      className="p-2 text-slate-400 hover:text-pink-400 hover:bg-slate-700/50 rounded-lg transition-colors"
                      title="Share"
                    >
