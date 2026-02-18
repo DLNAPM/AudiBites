@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Globe, Square, Play, Pause, AlertCircle, Save } from 'lucide-react';
-import { formatTime } from '../utils/audioUtils';
+import { Mic, Globe, Square, Upload, Save, AlertCircle, FileAudio, Smartphone, Monitor } from 'lucide-react';
+import { formatTime, extractAudioFromFile } from '../utils/audioUtils';
 
 interface RecorderProps {
-  onSave: (blob: Blob, name: string, source: 'recording') => void;
+  onSave: (blob: Blob, name: string, source: 'recording' | 'upload') => void;
   onCancel: () => void;
 }
 
 const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
-  const [mode, setMode] = useState<'MIC' | 'SYSTEM'>('MIC');
+  const [mode, setMode] = useState<'MIC' | 'SYSTEM' | 'IMPORT'>('MIC');
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -17,9 +17,16 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const [dataArray, setDataArray] = useState<Uint8Array | null>(null);
   
+  // Import Mode State
+  const [isProcessing, setIsProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const timerRef = useRef<number | null>(null);
   const animationRef = useRef<number | null>(null);
+
+  // Detect iOS for UI hints
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
 
   // Setup Audio Visualization
   useEffect(() => {
@@ -108,8 +115,6 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
 
       if (mode === 'SYSTEM') {
         // System audio via getDisplayMedia
-        // NOTE: We must request video: true for getDisplayMedia, but we only care about audio.
-        // User must select "Share tab audio" or "Share system audio" in the browser prompt.
         try {
             sourceStream = await navigator.mediaDevices.getDisplayMedia({
                 video: true, 
@@ -129,7 +134,6 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
         }
         
         // Fix: MediaRecorder with audio mimeType will fail if stream has video tracks.
-        // Extract only audio tracks for the recorder.
         streamToRecord = new MediaStream(sourceStream.getAudioTracks());
 
       } else {
@@ -138,7 +142,7 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
         streamToRecord = sourceStream;
       }
 
-      setStream(sourceStream); // Store full stream to stop everything later (including video indicator)
+      setStream(sourceStream); // Store full stream to stop everything later
 
       // Determine optimal mimeType
       let mimeType = '';
@@ -181,7 +185,7 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         alert("Permission denied. Please allow microphone or screen recording permissions in your browser settings.");
       } else if (err.toString().includes('display-capture')) {
-        alert("Screen recording is not supported or permitted in this environment.");
+        alert("System recording is not supported on this device. Please use the 'Import File' mode.");
       } else {
         alert(`Could not start recording: ${err.message || err}`);
       }
@@ -208,111 +212,201 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
     onSave(blob, name, 'recording');
   };
 
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessing(true);
+    try {
+      const blob = await extractAudioFromFile(file);
+      // Strip extension from filename
+      const name = file.name.replace(/\.[^/.]+$/, "");
+      onSave(blob, name, 'upload');
+    } catch (err: any) {
+      alert(err.message || "Failed to extract audio from file");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-900 text-white p-6 max-w-4xl mx-auto w-full">
       <div className="mb-8 text-center">
         <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-pink-500 mb-2">
           New Recording
         </h2>
-        <p className="text-slate-400">Capture system audio or microphone input</p>
+        <p className="text-slate-400">Capture system audio, microphone, or extract from video</p>
       </div>
 
       {/* Mode Selection */}
-      <div className="flex justify-center gap-4 mb-8">
+      <div className="flex flex-wrap justify-center gap-4 mb-8">
         <button
           onClick={() => !isRecording && setMode('MIC')}
-          className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-all ${
+          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
             mode === 'MIC' 
               ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30' 
               : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
           } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           <Mic size={20} />
-          <span>Microphone / Aux</span>
+          <span>Mic</span>
         </button>
+        
+        {/* System Audio Button (Hidden/Disabled on iOS ideally, but we'll show it with improved handling) */}
+        {!isIOS && (
+          <button
+            onClick={() => !isRecording && setMode('SYSTEM')}
+            className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
+              mode === 'SYSTEM' 
+                ? 'bg-pink-500 text-white shadow-lg shadow-pink-500/30' 
+                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+            } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <Monitor size={20} />
+            <span>System / Tab</span>
+          </button>
+        )}
+
         <button
-          onClick={() => !isRecording && setMode('SYSTEM')}
-          className={`flex items-center gap-2 px-6 py-3 rounded-xl transition-all ${
-            mode === 'SYSTEM' 
-              ? 'bg-pink-500 text-white shadow-lg shadow-pink-500/30' 
+          onClick={() => !isRecording && setMode('IMPORT')}
+          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
+            mode === 'IMPORT' 
+              ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30' 
               : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
           } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
-          <Globe size={20} />
-          <span>System Audio / URL</span>
+          <Upload size={20} />
+          <span>Import / iOS</span>
         </button>
       </div>
 
-      {/* Visualization Canvas */}
-      <div className="flex-1 bg-slate-800 rounded-2xl p-4 mb-8 relative overflow-hidden border border-slate-700 shadow-inner">
-        <canvas 
-          ref={canvasRef} 
-          width={800} 
-          height={200} 
-          className="w-full h-full object-cover rounded-xl"
-        />
-        {!isRecording && recordedChunks.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-500 pointer-events-none">
-            <span className="bg-slate-900/80 px-4 py-2 rounded-lg">Ready to Record</span>
-          </div>
-        )}
-      </div>
-
-      {/* Controls */}
-      <div className="flex flex-col items-center gap-6">
-        <div className="text-4xl font-mono font-bold tracking-wider text-slate-200">
-          {formatTime(duration)}
-        </div>
-
-        <div className="flex items-center gap-4">
-          {!isRecording && recordedChunks.length === 0 && (
-            <button
-              onClick={startRecording}
-              className="w-16 h-16 bg-red-500 hover:bg-red-400 rounded-full flex items-center justify-center shadow-lg shadow-red-500/40 transition-transform hover:scale-105 active:scale-95"
-            >
-              <div className="w-6 h-6 bg-white rounded-full"></div>
-            </button>
-          )}
-
-          {isRecording && (
-            <button
-              onClick={stopRecording}
-              className="w-16 h-16 bg-slate-700 hover:bg-slate-600 rounded-full flex items-center justify-center border-2 border-slate-500 transition-transform hover:scale-105 active:scale-95"
-            >
-              <Square size={24} className="fill-white text-white" />
-            </button>
-          )}
-
-          {!isRecording && recordedChunks.length > 0 && (
-            <div className="flex gap-4">
-               <button
-                onClick={() => {
-                  setRecordedChunks([]);
-                  setDuration(0);
-                  startRecording();
-                }}
-                className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors"
-              >
-                Discard & Retry
-              </button>
-              <button
-                onClick={handleSave}
-                className="flex items-center gap-2 px-8 py-3 bg-green-500 hover:bg-green-400 text-white rounded-xl font-medium shadow-lg shadow-green-500/30 transition-transform hover:scale-105"
-              >
-                <Save size={20} />
-                Save Recording
-              </button>
-            </div>
-          )}
-        </div>
+      {/* Visualization Canvas / Drop Zone */}
+      <div className="flex-1 bg-slate-800 rounded-2xl p-4 mb-8 relative overflow-hidden border border-slate-700 shadow-inner min-h-[200px] flex flex-col items-center justify-center">
         
-        {mode === 'SYSTEM' && !isRecording && (
-           <div className="flex items-center gap-2 text-yellow-500 text-sm bg-yellow-500/10 px-4 py-2 rounded-lg">
-             <AlertCircle size={16} />
-             <span>To record a URL (YouTube, Spotify), play it in another tab and select that tab when prompted.</span>
-           </div>
+        {mode === 'IMPORT' ? (
+          <div className="text-center p-6 w-full h-full flex flex-col items-center justify-center">
+            {isProcessing ? (
+              <div className="flex flex-col items-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4"></div>
+                <p className="text-indigo-400 font-medium">Extracting Audio...</p>
+              </div>
+            ) : (
+              <>
+                <div onClick={() => fileInputRef.current?.click()} className="cursor-pointer group flex flex-col items-center">
+                  <div className="w-20 h-20 bg-slate-700 rounded-full flex items-center justify-center mb-4 group-hover:bg-indigo-500/20 group-hover:text-indigo-400 transition-all text-slate-400">
+                    <FileAudio size={40} />
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-2">Import Video or Audio</h3>
+                  <p className="text-slate-400 max-w-sm mb-6">
+                    Upload a screen recording or video file to extract the audio automatically. 
+                  </p>
+                  <button className="px-6 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-medium shadow-lg shadow-indigo-500/30 transition-all">
+                    Select File
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef}
+                    onChange={handleImport}
+                    className="hidden" 
+                    accept="video/*,audio/*"
+                  />
+                </div>
+                
+                {isIOS && (
+                  <div className="mt-8 p-4 bg-slate-900/50 rounded-xl border border-slate-700 text-sm text-left max-w-md">
+                     <div className="flex items-center gap-2 text-indigo-400 mb-2 font-bold">
+                        <Smartphone size={16} />
+                        <span>How to record YouTube/Spotify on iOS:</span>
+                     </div>
+                     <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                       <li>Go to Control Center and start <strong>Screen Recording</strong></li>
+                       <li>Open YouTube/Spotify and play your content</li>
+                       <li>Stop recording (video saves to Photos)</li>
+                       <li>Come back here and <strong>Select File</strong></li>
+                     </ol>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            <canvas 
+              ref={canvasRef} 
+              width={800} 
+              height={200} 
+              className="w-full h-full object-cover rounded-xl absolute inset-0"
+            />
+            {!isRecording && recordedChunks.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center text-slate-500 pointer-events-none z-10">
+                <span className="bg-slate-900/80 px-4 py-2 rounded-lg backdrop-blur-sm border border-slate-700">
+                  {mode === 'SYSTEM' ? 'Ready to Capture System Audio' : 'Ready to Record Mic'}
+                </span>
+              </div>
+            )}
+          </>
         )}
       </div>
+
+      {/* Controls (Only show for MIC/SYSTEM modes) */}
+      {mode !== 'IMPORT' && (
+        <div className="flex flex-col items-center gap-6">
+          <div className="text-4xl font-mono font-bold tracking-wider text-slate-200">
+            {formatTime(duration)}
+          </div>
+
+          <div className="flex items-center gap-4">
+            {!isRecording && recordedChunks.length === 0 && (
+              <button
+                onClick={startRecording}
+                className="w-16 h-16 bg-red-500 hover:bg-red-400 rounded-full flex items-center justify-center shadow-lg shadow-red-500/40 transition-transform hover:scale-105 active:scale-95"
+              >
+                <div className="w-6 h-6 bg-white rounded-full"></div>
+              </button>
+            )}
+
+            {isRecording && (
+              <button
+                onClick={stopRecording}
+                className="w-16 h-16 bg-slate-700 hover:bg-slate-600 rounded-full flex items-center justify-center border-2 border-slate-500 transition-transform hover:scale-105 active:scale-95"
+              >
+                <Square size={24} className="fill-white text-white" />
+              </button>
+            )}
+
+            {!isRecording && recordedChunks.length > 0 && (
+              <div className="flex gap-4">
+                 <button
+                  onClick={() => {
+                    setRecordedChunks([]);
+                    setDuration(0);
+                    startRecording();
+                  }}
+                  className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors"
+                >
+                  Discard & Retry
+                </button>
+                <button
+                  onClick={handleSave}
+                  className="flex items-center gap-2 px-8 py-3 bg-green-500 hover:bg-green-400 text-white rounded-xl font-medium shadow-lg shadow-green-500/30 transition-transform hover:scale-105"
+                >
+                  <Save size={20} />
+                  Save Recording
+                </button>
+              </div>
+            )}
+          </div>
+          
+          {mode === 'SYSTEM' && !isRecording && (
+             <div className="flex items-center gap-2 text-yellow-500 text-sm bg-yellow-500/10 px-4 py-2 rounded-lg max-w-lg text-center">
+               <AlertCircle size={16} className="shrink-0" />
+               <span>
+                 <strong>Mac Users:</strong> Select the specific <strong>Chrome Tab</strong> you want to record. System-wide audio capture is not supported without virtual drivers.
+               </span>
+             </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

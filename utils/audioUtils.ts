@@ -128,3 +128,23 @@ export const cutAudioBuffer = (
 
   return newBuffer;
 };
+
+// Extract Audio from File (Video or Audio)
+export const extractAudioFromFile = async (file: File): Promise<Blob> => {
+  const arrayBuffer = await file.arrayBuffer();
+  // Using webkitAudioContext for broader Safari/iOS support if AudioContext is missing
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  const audioContext = new AudioContextClass();
+  
+  try {
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const wavBlob = bufferToWav(audioBuffer);
+    return wavBlob;
+  } catch (error) {
+    throw new Error("Could not decode audio data. The file format might not be supported.");
+  } finally {
+    if (audioContext.state !== 'closed') {
+      await audioContext.close();
+    }
+  }
+};
