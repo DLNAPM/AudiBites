@@ -36,6 +36,13 @@ const Editor: React.FC<EditorProps> = ({ initialBlob, initialName, onClose, onSa
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     setAudioContext(ctx);
 
+    // Decode audio data immediately once (Fix for bug where edits were lost)
+    initialBlob.arrayBuffer().then(arrayBuffer => {
+      ctx.decodeAudioData(arrayBuffer).then(decodedBuffer => {
+        setAudioBuffer(decodedBuffer);
+      });
+    });
+
     const ws = WaveSurfer.create({
       container: containerRef.current,
       waveColor: '#38bdf8',
@@ -73,12 +80,8 @@ const Editor: React.FC<EditorProps> = ({ initialBlob, initialName, onClose, onSa
     ws.on('ready', () => {
       setLoading(false);
       setTotalDuration(ws.getDuration());
-      // Decode audio data for manipulation
-      initialBlob.arrayBuffer().then(arrayBuffer => {
-        ctx.decodeAudioData(arrayBuffer).then(decodedBuffer => {
-          setAudioBuffer(decodedBuffer);
-        });
-      });
+      // Note: We do NOT setAudioBuffer here anymore, as 'ready' fires after every loadBlob()
+      // which happens after every edit, effectively undoing the edit if we used initialBlob here.
     });
 
     ws.on('play', () => setIsPlaying(true));
@@ -175,7 +178,8 @@ const Editor: React.FC<EditorProps> = ({ initialBlob, initialName, onClose, onSa
   const handleSave = () => {
     if (!audioBuffer) return;
     const blob = bufferToWav(audioBuffer);
-    onSave(blob, `${fileName} (Edited)`);
+    // Use the filename from input, assume user will name it appropriately
+    onSave(blob, fileName);
   };
 
   return (
