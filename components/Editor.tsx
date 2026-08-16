@@ -79,6 +79,7 @@ const Editor: React.FC<EditorProps> = ({
   const [activeRegion, setActiveRegion] = useState<Region | null>(null);
   const [fileName, setFileName] = useState(initialName || 'Edited Track');
   const [loading, setLoading] = useState(true);
+  const [isAudioReady, setIsAudioReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
 
@@ -111,6 +112,7 @@ const Editor: React.FC<EditorProps> = ({
       });
     });
 
+    const objectUrl = URL.createObjectURL(initialBlob);
     const ws = WaveSurfer.create({
       container: containerRef.current,
       waveColor: '#38bdf8',
@@ -123,7 +125,7 @@ const Editor: React.FC<EditorProps> = ({
       height: 140,
       normalize: true,
       minPxPerSec: 50,
-      url: URL.createObjectURL(initialBlob),
+      url: objectUrl,
     });
 
     const regs = RegionsPlugin.create();
@@ -146,7 +148,20 @@ const Editor: React.FC<EditorProps> = ({
 
     ws.on('ready', () => {
       setLoading(false);
+      setIsAudioReady(true);
       setTotalDuration(ws.getDuration());
+      try {
+        ws.zoom(zoomLevel);
+        ws.setPlaybackRate(playbackRate);
+        ws.setVolume(isMuted ? 0 : volume);
+      } catch (err) {
+        console.warn('WaveSurfer ready hook config warning:', err);
+      }
+    });
+
+    ws.on('loading', () => {
+      setLoading(true);
+      setIsAudioReady(false);
     });
 
     ws.on('play', () => setIsPlaying(true));
@@ -182,6 +197,7 @@ const Editor: React.FC<EditorProps> = ({
     });
 
     return () => {
+      URL.revokeObjectURL(objectUrl);
       ws.destroy();
       if (ctx.state !== 'closed') {
         ctx.close();
@@ -191,22 +207,34 @@ const Editor: React.FC<EditorProps> = ({
 
   // Update WaveSurfer Zoom
   useEffect(() => {
-    if (wavesurfer.current) {
-      wavesurfer.current.zoom(zoomLevel);
+    if (wavesurfer.current && isAudioReady && !loading) {
+      try {
+        wavesurfer.current.zoom(zoomLevel);
+      } catch (err) {
+        console.warn('Could not zoom waveform:', err);
+      }
     }
-  }, [zoomLevel]);
+  }, [zoomLevel, isAudioReady, loading]);
 
   // Update Playback Rate
   useEffect(() => {
-    if (wavesurfer.current) {
-      wavesurfer.current.setPlaybackRate(playbackRate);
+    if (wavesurfer.current && isAudioReady) {
+      try {
+        wavesurfer.current.setPlaybackRate(playbackRate);
+      } catch (err) {
+        console.warn('Could not set playback rate:', err);
+      }
     }
-  }, [playbackRate]);
+  }, [playbackRate, isAudioReady]);
 
   // Update Volume
   useEffect(() => {
     if (wavesurfer.current) {
-      wavesurfer.current.setVolume(isMuted ? 0 : volume);
+      try {
+        wavesurfer.current.setVolume(isMuted ? 0 : volume);
+      } catch (err) {
+        console.warn('Could not set volume:', err);
+      }
     }
   }, [volume, isMuted]);
 
@@ -225,6 +253,8 @@ const Editor: React.FC<EditorProps> = ({
     setHistoryIndex(newHistory.length - 1);
 
     const newBlob = bufferToWav(newBuffer);
+    setIsAudioReady(false);
+    setLoading(true);
     wavesurfer.current?.loadBlob(newBlob);
     regionsPlugin.current?.clearRegions();
     setActiveRegion(null);
@@ -242,6 +272,8 @@ const Editor: React.FC<EditorProps> = ({
       setHistoryIndex(prevIndex);
 
       const newBlob = bufferToWav(restored);
+      setIsAudioReady(false);
+      setLoading(true);
       wavesurfer.current?.loadBlob(newBlob);
       regionsPlugin.current?.clearRegions();
       setActiveRegion(null);
@@ -260,6 +292,8 @@ const Editor: React.FC<EditorProps> = ({
       setHistoryIndex(nextIndex);
 
       const newBlob = bufferToWav(restored);
+      setIsAudioReady(false);
+      setLoading(true);
       wavesurfer.current?.loadBlob(newBlob);
       regionsPlugin.current?.clearRegions();
       setActiveRegion(null);
