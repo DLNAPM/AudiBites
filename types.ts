@@ -4,20 +4,31 @@ export enum AppView {
   EDITOR = 'EDITOR',
 }
 
+export type TrackSource = 'recording' | 'upload' | 'edited' | 'sample';
+
 export interface AudioTrack {
   id: string;
   name: string;
   blob: Blob;
   createdAt: number;
   duration: number; // in seconds
-  source: 'recording' | 'upload' | 'edited';
+  source: TrackSource;
+  size?: number; // size in bytes
+  sampleRate?: number;
+  channels?: number;
 }
 
 export interface AudioRecorderState {
   isRecording: boolean;
+  isPaused: boolean;
   duration: number;
   audioBlob: Blob | null;
-  mode: 'MIC' | 'SYSTEM';
+  mode: 'MIC' | 'SYSTEM' | 'IMPORT';
 }
 
 export type AudioContextType = AudioContext | null;
+
+export interface AudioEditAction {
+  label: string;
+  timestamp: number;
+}

@@ -1,76 +1,146 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { AudioTrack } from '../types';
-import { Play, Pause, Download, Trash2, Clock, Music, Share2, Upload } from 'lucide-react';
+import {
+  Play,
+  Pause,
+  Download,
+  Trash2,
+  Clock,
+  Music,
+  Share2,
+  Upload,
+  Scissors,
+  Search,
+  Filter,
+  Copy,
+  Edit2,
+  Check,
+  X,
+  Volume2,
+  Sparkles,
+  Layers,
+  HardDrive,
+  SlidersHorizontal,
+} from 'lucide-react';
+import { formatTime, formatTimePrecise, formatFileSize, createSampleTrack } from '../utils/audioUtils';
 
 interface LibraryProps {
   tracks: AudioTrack[];
-  onPlay: (track: AudioTrack) => void;
   onDelete: (id: string) => void;
+  onBulkDelete?: (ids: string[]) => void;
   onEdit: (track: AudioTrack) => void;
   onUpload: (file: File) => void;
+  onDuplicate?: (track: AudioTrack) => void;
+  onRename?: (id: string, newName: string) => void;
+  onAddSample?: (track: AudioTrack) => void;
 }
 
-const Library: React.FC<LibraryProps> = ({ tracks, onPlay, onDelete, onEdit, onUpload }) => {
+const Library: React.FC<LibraryProps> = ({
+  tracks,
+  onDelete,
+  onBulkDelete,
+  onEdit,
+  onUpload,
+  onDuplicate,
+  onRename,
+  onAddSample,
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterSource, setFilterSource] = useState<string>('ALL');
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'longest' | 'shortest' | 'name'>('newest');
+
+  // Active audio player
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Renaming state
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [newNameVal, setNewNameVal] = useState('');
+
+  // Multi-selection state
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Audio playback handler
   const handlePlay = (track: AudioTrack) => {
     if (playingId === track.id) {
-      audioRef.current?.pause();
-      setPlayingId(null);
+      if (audioRef.current) {
+        if (audioRef.current.paused) {
+          audioRef.current.play();
+        } else {
+          audioRef.current.pause();
+          setPlayingId(null);
+        }
+      }
     } else {
       if (audioRef.current) {
         audioRef.current.pause();
       }
       const audio = new Audio(URL.createObjectURL(track.blob));
       audioRef.current = audio;
-      audio.onended = () => setPlayingId(null);
-      audio.play();
       setPlayingId(track.id);
+
+      audio.ontimeupdate = () => {
+        setCurrentTime(audio.currentTime);
+      };
+      audio.onloadedmetadata = () => {
+        setAudioDuration(audio.duration);
+      };
+      audio.onended = () => {
+        setPlayingId(null);
+        setCurrentTime(0);
+      };
+
+      audio.play().catch((err) => {
+        console.warn('Playback error:', err);
+      });
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const time = Number(e.target.value);
+    setCurrentTime(time);
+    if (audioRef.current) {
+      audioRef.current.currentTime = time;
     }
   };
 
   const handleDownload = async (track: AudioTrack) => {
-    // 1. Try File System Access API (Allows user to pick directory)
+    const cleanName = track.name.replace(/[\\/:*?"<>|]/g, '_');
     if ('showSaveFilePicker' in window) {
       try {
         const handle = await (window as any).showSaveFilePicker({
-          suggestedName: `${track.name}.mp3`,
-          types: [{
-            description: 'Audio File',
-            accept: { 'audio/mpeg': ['.mp3'] },
-          }],
+          suggestedName: `${cleanName}.wav`,
+          types: [
+            {
+              description: 'WAV Audio File',
+              accept: { 'audio/wav': ['.wav'] },
+            },
+          ],
         });
         const writable = await handle.createWritable();
         await writable.write(track.blob);
         await writable.close();
-        return; // Success
+        return;
       } catch (err: any) {
-        // If user cancels, we just stop. If it's an error, we might fall back.
         if (err.name === 'AbortError') return;
-        console.warn('File System Access API failed, falling back to legacy download', err);
       }
     }
 
-    // 2. Fallback: Standard Anchor Download (Browser Default)
     const url = URL.createObjectURL(track.blob);
     const a = document.createElement('a');
-    a.style.display = 'none';
     a.href = url;
-    a.download = `${track.name}.mp3`;
+    a.download = `${cleanName}.wav`;
     document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
     a.remove();
   };
 
   const handleShare = async (track: AudioTrack) => {
-    // Create a File object. We use .mp3 extension and audio/mpeg type 
-    // to maximize compatibility with share sheets (e.g. WhatsApp, Email), 
-    // even if the underlying blob is WAV/WebM.
-    const file = new File([track.blob], `${track.name}.mp3`, { type: 'audio/mpeg' });
-
+    const file = new File([track.blob], `${track.name}.wav`, { type: 'audio/wav' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({
@@ -78,118 +148,443 @@ const Library: React.FC<LibraryProps> = ({ tracks, onPlay, onDelete, onEdit, onU
           title: track.name,
           text: `Check out this audio clip: ${track.name}`,
         });
-      } catch (error: any) {
-        if (error.name !== 'AbortError') {
-          console.error('Error sharing:', error);
-          alert(`Could not share: ${error.message}`);
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Error sharing:', err);
         }
       }
     } else {
-      alert("Sharing files is not supported on this specific browser or device. Please download the file and share it manually.");
+      handleDownload(track);
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      onUpload(e.target.files[0]);
+  const handleStartRename = (track: AudioTrack) => {
+    setEditingNameId(track.id);
+    setNewNameVal(track.name);
+  };
+
+  const handleSaveRename = (id: string) => {
+    if (newNameVal.trim() && onRename) {
+      onRename(id, newNameVal.trim());
+    }
+    setEditingNameId(null);
+  };
+
+  const handleSelectToggle = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === filteredTracks.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredTracks.map((t) => t.id));
     }
   };
+
+  const handleGenerateSample = async (style: 'chime' | 'pulse' | 'ambient') => {
+    if (!onAddSample) return;
+    const sample = await createSampleTrack(style);
+    const newTrack: AudioTrack = {
+      id: crypto.randomUUID(),
+      name: sample.name,
+      blob: sample.blob,
+      createdAt: Date.now(),
+      duration: sample.duration,
+      source: 'sample',
+      size: sample.blob.size,
+    };
+    onAddSample(newTrack);
+  };
+
+  // Filter & Sort logic
+  const filteredTracks = tracks.filter((track) => {
+    const matchesSearch = track.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSource = filterSource === 'ALL' || track.source === filterSource;
+    return matchesSearch && matchesSource;
+  });
+
+  filteredTracks.sort((a, b) => {
+    if (sortBy === 'newest') return b.createdAt - a.createdAt;
+    if (sortBy === 'oldest') return a.createdAt - b.createdAt;
+    if (sortBy === 'longest') return b.duration - a.duration;
+    if (sortBy === 'shortest') return a.duration - b.duration;
+    if (sortBy === 'name') return a.name.localeCompare(b.name);
+    return 0;
+  });
 
   return (
-    <div className="p-6 max-w-6xl mx-auto w-full">
-      <div className="flex items-center justify-between mb-8">
+    <div className="p-4 md:p-8 max-w-6xl mx-auto w-full">
+      {/* Top Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-5">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2">My AudiBites</h2>
-          <p className="text-slate-400">Manage, edit, and share your audio clips</p>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Audio Library</h2>
+          <p className="text-sm text-slate-400 mt-0.5">
+            {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'} stored locally
+          </p>
         </div>
-        
-        <div className="flex gap-4">
-          <button 
+
+        <div className="flex items-center gap-2">
+          {/* Demo Sound Generator Dropdown */}
+          <div className="relative group">
+            <button className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-950 hover:bg-slate-850 text-sky-400 rounded-xl border border-slate-800 text-xs font-semibold shadow-xs transition-colors">
+              <Sparkles size={14} />
+              <span>Generate Demo</span>
+            </button>
+            <div className="absolute right-0 mt-1 w-48 bg-slate-900 border border-slate-800 rounded-xl shadow-xl p-1 z-30 hidden group-hover:block">
+              <button
+                onClick={() => handleGenerateSample('chime')}
+                className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                🔔 Crystal Chimes
+              </button>
+              <button
+                onClick={() => handleGenerateSample('pulse')}
+                className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                ⚡ Synth Pulse
+              </button>
+              <button
+                onClick={() => handleGenerateSample('ambient')}
+                className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                🌌 Ambient Drone
+              </button>
+            </div>
+          </div>
+
+          <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg border border-slate-700 transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 bg-sky-500 hover:bg-sky-400 text-white rounded-xl text-xs font-semibold shadow-sm shadow-sky-500/20 transition-all"
           >
-            <Upload size={18} />
+            <Upload size={14} />
             <span>Upload File</span>
           </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload} 
-            className="hidden" 
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={(e) => {
+              if (e.target.files && e.target.files[0]) {
+                onUpload(e.target.files[0]);
+              }
+            }}
+            className="hidden"
             accept="audio/*,video/*"
           />
         </div>
       </div>
 
-      {tracks.length === 0 ? (
-        <div className="bg-slate-800/50 border-2 border-dashed border-slate-700 rounded-2xl p-12 text-center">
-          <Music size={48} className="mx-auto text-slate-600 mb-4" />
-          <h3 className="text-xl font-semibold text-slate-300 mb-2">No audio clips yet</h3>
-          <p className="text-slate-500">Record something new or upload a file to get started.</p>
+      {/* Search, Filter, Sort, & Bulk Bar */}
+      <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 mb-6 space-y-4 shadow-xs">
+        <div className="flex flex-col md:flex-row items-center gap-3">
+          {/* Search Input */}
+          <div className="relative flex-1 w-full">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search audio clips..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Source Filter */}
+          <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
+            {['ALL', 'recording', 'upload', 'edited', 'sample'].map((src) => (
+              <button
+                key={src}
+                onClick={() => setFilterSource(src)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider transition-colors whitespace-nowrap ${
+                  filterSource === src
+                    ? 'bg-slate-800 text-sky-400 border border-sky-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                {src === 'ALL' ? 'All' : src}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort By Dropdown */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-slate-500 hidden sm:inline">Sort:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="bg-slate-900 border border-slate-800 text-xs text-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:border-sky-500 cursor-pointer"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="longest">Longest Duration</option>
+              <option value="shortest">Shortest Duration</option>
+              <option value="name">Name (A-Z)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Bulk Action Controls */}
+        {selectedIds.length > 0 && (
+          <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-300">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-white">{selectedIds.length}</span>
+              <span>selected</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {onBulkDelete && (
+                <button
+                  onClick={() => {
+                    onBulkDelete(selectedIds);
+                    setSelectedIds([]);
+                  }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-lg transition-colors font-medium"
+                >
+                  <Trash2 size={13} />
+                  <span>Delete Selected</span>
+                </button>
+              )}
+              <button
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 rounded-lg border border-slate-800 transition-colors"
+              >
+                Deselect All
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Tracks Grid */}
+      {filteredTracks.length === 0 ? (
+        <div className="bg-slate-950/40 border-2 border-dashed border-slate-800 rounded-2xl p-12 text-center flex flex-col items-center justify-center">
+          <div className="w-14 h-14 bg-slate-900 rounded-2xl flex items-center justify-center text-slate-600 mb-3 border border-slate-800">
+            <Music size={28} />
+          </div>
+          <h3 className="text-base font-bold text-white mb-1">
+            {tracks.length === 0 ? 'Your library is empty' : 'No matching audio tracks found'}
+          </h3>
+          <p className="text-xs text-slate-400 max-w-sm mb-6 leading-relaxed">
+            {tracks.length === 0
+              ? 'Record new audio clips, upload files, or generate crystal audio samples to start building your library.'
+              : 'Try clearing the search query or changing the filter options above.'}
+          </p>
+
+          {tracks.length === 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={() => handleGenerateSample('chime')}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-850 text-sky-400 border border-slate-800 rounded-xl text-xs font-semibold transition-colors"
+              >
+                ✨ Load Demo Sample
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
+              >
+                Upload File
+              </button>
+            </div>
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {tracks.map((track) => (
-            <div key={track.id} className="bg-slate-800 rounded-xl p-5 border border-slate-700 hover:border-slate-600 transition-all shadow-lg group">
-              <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 rounded-full bg-slate-700 flex items-center justify-center text-sky-500">
-                  <Music size={24} />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredTracks.map((track) => {
+            const isPlaying = playingId === track.id;
+            const isSelected = selectedIds.includes(track.id);
+
+            return (
+              <div
+                key={track.id}
+                className={`group bg-slate-950/80 rounded-2xl p-5 border transition-all shadow-md flex flex-col justify-between ${
+                  isSelected
+                    ? 'border-sky-500 bg-sky-500/5'
+                    : 'border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                {/* Header & Source Tag */}
+                <div>
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleSelectToggle(track.id)}
+                        className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0 cursor-pointer"
+                      />
+                      <span
+                        className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                          track.source === 'recording'
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            : track.source === 'edited'
+                            ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                            : track.source === 'upload'
+                            ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        }`}
+                      >
+                        {track.source}
+                      </span>
+                    </div>
+
+                    {/* Quick Card Actions */}
+                    <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => onEdit(track)}
+                        className="p-1.5 text-slate-400 hover:text-sky-400 hover:bg-slate-900 rounded-lg transition-colors"
+                        title="Open in Studio Editor"
+                      >
+                        <Scissors size={15} />
+                      </button>
+
+                      {onDuplicate && (
+                        <button
+                          onClick={() => onDuplicate(track)}
+                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-900 rounded-lg transition-colors"
+                          title="Duplicate Track"
+                        >
+                          <Copy size={14} />
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => onDelete(track.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-900 rounded-lg transition-colors"
+                        title="Delete Track"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Title & Renaming */}
+                  {editingNameId === track.id ? (
+                    <div className="flex items-center gap-1 mb-2">
+                      <input
+                        type="text"
+                        value={newNameVal}
+                        onChange={(e) => setNewNameVal(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-sky-500 rounded-lg px-2 py-1 text-xs text-white focus:outline-none"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveRename(track.id);
+                          if (e.key === 'Escape') setEditingNameId(null);
+                        }}
+                      />
+                      <button
+                        onClick={() => handleSaveRename(track.id)}
+                        className="p-1 text-emerald-400 hover:bg-slate-800 rounded"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        onClick={() => setEditingNameId(null)}
+                        className="p-1 text-slate-400 hover:bg-slate-800 rounded"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <h3
+                        className="text-sm font-bold text-white truncate cursor-pointer hover:text-sky-400 transition-colors"
+                        title={track.name}
+                        onClick={() => handleStartRename(track)}
+                      >
+                        {track.name}
+                      </h3>
+                      <button
+                        onClick={() => handleStartRename(track)}
+                        className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-slate-300 p-0.5 transition-opacity"
+                        title="Rename"
+                      >
+                        <Edit2 size={12} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Metadata Chips */}
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mb-4 font-mono">
+                    <span className="flex items-center gap-1">
+                      <Clock size={11} className="text-slate-500" />
+                      {formatTime(track.duration || 0)}
+                    </span>
+                    <span>•</span>
+                    <span>{formatFileSize(track.size || track.blob.size)}</span>
+                    <span>•</span>
+                    <span className="text-slate-500 font-sans">
+                      {new Date(track.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => onEdit(track)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg">
-                    Edit
-                  </button>
-                  <button onClick={() => onDelete(track.id)} className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-lg">
-                    <Trash2 size={18} />
-                  </button>
+
+                {/* Inline Player & Playback Seeker */}
+                <div className="pt-3 border-t border-slate-800/80 space-y-3">
+                  {isPlaying && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                        <span>{formatTimePrecise(currentTime)}</span>
+                        <span>{formatTimePrecise(audioDuration || track.duration)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max={audioDuration || track.duration || 1}
+                        step="0.05"
+                        value={currentTime}
+                        onChange={handleSeek}
+                        className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => handlePlay(track)}
+                      className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-semibold text-xs transition-all ${
+                        isPlaying
+                          ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/30'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                      }`}
+                    >
+                      {isPlaying ? (
+                        <Pause size={14} fill="currentColor" />
+                      ) : (
+                        <Play size={14} fill="currentColor" className="ml-0.5" />
+                      )}
+                      <span>{isPlaying ? 'Pause' : 'Play'}</span>
+                    </button>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleDownload(track)}
+                        className="p-1.5 text-slate-400 hover:text-sky-400 hover:bg-slate-900 rounded-lg border border-transparent hover:border-slate-800 transition-colors"
+                        title="Download WAV"
+                      >
+                        <Download size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleShare(track)}
+                        className="p-1.5 text-slate-400 hover:text-pink-400 hover:bg-slate-900 rounded-lg border border-transparent hover:border-slate-800 transition-colors"
+                        title="Share Audio Clip"
+                      >
+                        <Share2 size={15} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              <h3 className="text-lg font-semibold text-white mb-1 truncate" title={track.name}>
-                {track.name}
-              </h3>
-              <div className="flex items-center gap-4 text-xs text-slate-400 mb-6">
-                <span className="flex items-center gap-1">
-                  <Clock size={12} />
-                  {new Date(track.createdAt).toLocaleDateString()}
-                </span>
-                <span className="uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-700/50 text-[10px]">
-                  {track.source}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between mt-auto">
-                <button
-                  onClick={() => handlePlay(track)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
-                    playingId === track.id 
-                    ? 'bg-sky-500 text-white' 
-                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                  }`}
-                >
-                  {playingId === track.id ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-                  <span>{playingId === track.id ? 'Pause' : 'Play'}</span>
-                </button>
-
-                <div className="flex gap-2">
-                   <button 
-                    onClick={() => handleDownload(track)}
-                    className="p-2 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded-lg transition-colors"
-                    title="Download / Save As..."
-                   >
-                     <Download size={20} />
-                   </button>
-                   <button 
-                     onClick={() => handleShare(track)}
-                     className="p-2 text-slate-400 hover:text-pink-400 hover:bg-slate-700/50 rounded-lg transition-colors"
-                     title="Share"
-                   >
-                     <Share2 size={20} />
-                   </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

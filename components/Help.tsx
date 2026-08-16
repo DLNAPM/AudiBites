@@ -1,5 +1,15 @@
 import React from 'react';
-import { X, Monitor, Smartphone, Scissors, FileAudio, CheckCircle2 } from 'lucide-react';
+import {
+  X,
+  Monitor,
+  Smartphone,
+  Scissors,
+  Sparkles,
+  CheckCircle2,
+  Sliders,
+  Keyboard,
+  Info,
+} from 'lucide-react';
 
 interface HelpProps {
   onClose: () => void;
@@ -7,125 +17,144 @@ interface HelpProps {
 
 const Help: React.FC<HelpProps> = ({ onClose }) => {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl shadow-2xl flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-slate-800 sticky top-0 bg-slate-900/95 backdrop-blur z-10">
-          <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-            <span className="bg-sky-500 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-lg shadow-sky-500/20">?</span>
-            How to use AudiBites
-          </h2>
-          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
-            <X size={24} />
+        <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-900/95 backdrop-blur-sm z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-sm">
+              ?
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white">AudiBites Studio Guide</h2>
+              <p className="text-xs text-slate-400">Master audio recording, waveform trimming, and audio processing</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+          >
+            <X size={20} />
           </button>
         </div>
-        
-        <div className="p-6 space-y-8">
-          {/* Section 1: Recording Source */}
-          <section>
-            <h3 className="text-xl font-semibold text-sky-400 mb-4 flex items-center gap-2">
-              <Monitor size={20} /> Recording Audio Sources
+
+        {/* Content Body */}
+        <div className="p-6 space-y-6 text-slate-300 text-xs">
+          {/* Section 1: Recording System Audio & Tabs */}
+          <section className="space-y-3">
+            <h3 className="text-sm font-bold text-sky-400 flex items-center gap-2">
+              <Monitor size={16} />
+              1. Capturing Music & Tab Audio (Spotify, YouTube, SoundCloud)
             </h3>
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50">
-                <h4 className="font-bold text-white mb-3 text-lg">Windows PC</h4>
-                <ul className="space-y-3">
-                  <li className="flex gap-3 text-slate-400 text-sm">
-                    <span className="bg-slate-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 mt-0.5">1</span>
-                    <span>Click <strong>System / Tab</strong> in the Recorder.</span>
-                  </li>
-                  <li className="flex gap-3 text-slate-400 text-sm">
-                    <span className="bg-slate-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 mt-0.5">2</span>
-                    <span>Select "Entire Screen" or a specific "Tab".</span>
-                  </li>
-                  <li className="flex gap-3 text-slate-300 text-sm font-medium bg-sky-500/10 p-2 rounded-lg border border-sky-500/20">
-                    <CheckCircle2 size={16} className="text-sky-500 flex-shrink-0 mt-0.5" />
-                    <span>Important: Check the "Share System Audio" box in the browser popup.</span>
-                  </li>
-                </ul>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                <h4 className="font-semibold text-white text-xs">Chrome / Edge / Brave (Windows & Mac)</h4>
+                <ol className="list-decimal list-inside space-y-1.5 text-slate-400">
+                  <li>Click <strong>System / Tab</strong> in the Recorder tab.</li>
+                  <li>In the browser screen-picker popup, select the <strong>Chrome Tab</strong> (or Window) tab.</li>
+                  <li>Check the toggle for <strong>"Share tab audio"</strong> at the bottom left.</li>
+                  <li>Select the Spotify or YouTube tab and start recording!</li>
+                </ol>
               </div>
-              <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50">
-                <h4 className="font-bold text-white mb-3 text-lg">MacOS</h4>
-                <ul className="space-y-3">
-                  <li className="flex gap-3 text-slate-400 text-sm">
-                    <span className="bg-slate-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 mt-0.5">1</span>
-                    <span>Click <strong>System / Tab</strong> in the Recorder.</span>
-                  </li>
-                  <li className="flex gap-3 text-slate-400 text-sm">
-                    <span className="bg-slate-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 mt-0.5">2</span>
-                    <span>Select the <strong>"Chrome Tab"</strong> option.</span>
-                  </li>
-                  <li className="flex gap-3 text-slate-400 text-sm">
-                    <span className="bg-slate-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0 mt-0.5">3</span>
-                    <span>MacOS cannot capture "Entire System" audio due to security restrictions. You must pick a specific tab (e.g., Spotify, YouTube).</span>
-                  </li>
-                </ul>
+
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                <h4 className="font-semibold text-white text-xs">iPhone & iPad (iOS Direct Import)</h4>
+                <ol className="list-decimal list-inside space-y-1.5 text-slate-400">
+                  <li>Swipe down from top right to open iOS <strong>Control Center</strong>.</li>
+                  <li>Tap <strong>Screen Recording</strong> and switch to your music/video app.</li>
+                  <li>When finished, stop screen recording (saved to Photos).</li>
+                  <li>In AudiBites, click <strong>Import File</strong> to extract the pure audio.</li>
+                </ol>
               </div>
             </div>
           </section>
 
-          {/* Section 2: Mobile/iOS */}
-          <section>
-             <h3 className="text-xl font-semibold text-indigo-400 mb-4 flex items-center gap-2">
-              <Smartphone size={20} /> iPhone & iPad Users
+          {/* Section 2: Audio Studio Editing Features */}
+          <section className="space-y-3">
+            <h3 className="text-sm font-bold text-pink-400 flex items-center gap-2">
+              <Scissors size={16} />
+              2. Waveform Editing Suite
             </h3>
-            <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 flex flex-col md:flex-row gap-6 items-center">
-               <div className="flex-1 text-slate-300 text-sm">
-                  <p className="mb-4 text-base">Browsers on iOS cannot record system audio directly. Use the <strong>Import</strong> feature:</p>
-                  <ol className="space-y-3">
-                    <li className="flex gap-3 text-slate-400">
-                        <span className="font-bold text-indigo-400">Step 1:</span>
-                        <span>Open your <strong>Control Center</strong> and start a <strong>Screen Recording</strong>.</span>
-                    </li>
-                    <li className="flex gap-3 text-slate-400">
-                        <span className="font-bold text-indigo-400">Step 2:</span>
-                        <span>Switch to YouTube/Spotify and play your audio.</span>
-                    </li>
-                    <li className="flex gap-3 text-slate-400">
-                        <span className="font-bold text-indigo-400">Step 3:</span>
-                        <span>Stop recording. The video saves to your Photos app.</span>
-                    </li>
-                    <li className="flex gap-3 text-slate-400">
-                        <span className="font-bold text-indigo-400">Step 4:</span>
-                        <span>In AudiBites, select <strong>Import / iOS</strong> and upload that video. We'll strip the audio for you.</span>
-                    </li>
-                  </ol>
-               </div>
-            </div>
-          </section>
-
-          {/* Section 3: Editing */}
-           <section>
-             <h3 className="text-xl font-semibold text-pink-400 mb-4 flex items-center gap-2">
-              <Scissors size={20} /> Editing & Saving
-            </h3>
-            <div className="grid md:grid-cols-3 gap-4">
-              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                <h4 className="font-bold text-white mb-2">1. Select Region</h4>
-                <p className="text-sm text-slate-400">Click and drag on the waveform to create a region. Drag edges to adjust start/end times.</p>
-              </div>
-               <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                <h4 className="font-bold text-white mb-2">2. Apply Edit</h4>
-                <p className="text-sm text-slate-400">
-                  <strong>Trim:</strong> Deletes everything <em>outside</em> the selection.<br/>
-                  <strong>Cut:</strong> Deletes the selected region itself.
+            <div className="grid md:grid-cols-3 gap-3">
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <h4 className="font-semibold text-white text-xs">Trim & Cut</h4>
+                <p className="text-slate-400">
+                  Drag on the waveform to select a region. Click <strong>Trim</strong> to keep only the selected snippet, or <strong>Cut</strong> to delete it.
                 </p>
               </div>
-               <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                <h4 className="font-bold text-white mb-2">3. Save & Share</h4>
-                <p className="text-sm text-slate-400">Save to Library to enable sharing. Use the Share icon to send via WhatsApp, iMessage, or Email.</p>
+
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <h4 className="font-semibold text-white text-xs">Fade In & Fade Out</h4>
+                <p className="text-slate-400">
+                  Apply smooth volume transitions (0.25s to 2s) to prevent audio clicks and create studio-grade intros and outros.
+                </p>
+              </div>
+
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <h4 className="font-semibold text-white text-xs">Normalize & Gain</h4>
+                <p className="text-slate-400">
+                  <strong>Normalize</strong> maximizes loudness automatically without distortion. <strong>Gain +/-</strong> lets you boost or reduce volume in decibels.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* Section 3: Keyboard Shortcuts */}
+          <section className="space-y-3">
+            <h3 className="text-sm font-bold text-purple-400 flex items-center gap-2">
+              <Keyboard size={16} />
+              3. Studio Keyboard Shortcuts
+            </h3>
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Play / Pause</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    Space
+                  </kbd>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Undo Action</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    Ctrl / Cmd + Z
+                  </kbd>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Redo Action</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    Ctrl + Shift + Z
+                  </kbd>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Trim Selection</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    T
+                  </kbd>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Cut Selection</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    Del / Backspace
+                  </kbd>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Clear Selection</span>
+                  <kbd className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded font-mono text-sky-400 text-[11px]">
+                    Escape
+                  </kbd>
+                </div>
               </div>
             </div>
           </section>
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-slate-800 bg-slate-900/50 text-center rounded-b-2xl">
-          <button 
+        <div className="p-4 border-t border-slate-800 bg-slate-950 flex justify-end">
+          <button
             onClick={onClose}
-            className="bg-slate-700 hover:bg-slate-600 text-white px-12 py-3 rounded-xl font-medium transition-colors shadow-lg"
+            className="px-6 py-2 bg-sky-500 hover:bg-sky-400 text-white rounded-xl text-xs font-semibold shadow-xs transition-all"
           >
-            Got it, thanks!
+            Close Guide
           </button>
         </div>
       </div>

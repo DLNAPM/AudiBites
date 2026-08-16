@@ -4,5 +4,6 @@
   "requestFramePermissions": [
     "microphone",
     "display-capture"
-  ]
+  ],
+  "majorCapabilities": []
 }

@@ -1,112 +1,221 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Globe, Square, Upload, Save, AlertCircle, FileAudio, Smartphone, Monitor } from 'lucide-react';
-import { formatTime, extractAudioFromFile } from '../utils/audioUtils';
+import {
+  Mic,
+  Monitor,
+  Upload,
+  Square,
+  Play,
+  Pause,
+  RotateCcw,
+  Save,
+  Scissors,
+  Volume2,
+  Sliders,
+  Sparkles,
+  Info,
+  CheckCircle2,
+  FileAudio,
+  Smartphone,
+  AlertTriangle,
+} from 'lucide-react';
+import { formatTime, formatTimePrecise, formatFileSize, extractAudioFromFile, getAudioMetadata } from '../utils/audioUtils';
 
 interface RecorderProps {
-  onSave: (blob: Blob, name: string, source: 'recording' | 'upload') => void;
+  onSave: (blob: Blob, name: string, source: 'recording' | 'upload', duration?: number) => void;
+  onOpenInEditor?: (blob: Blob, name: string) => void;
   onCancel: () => void;
 }
 
-const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
+const Recorder: React.FC<RecorderProps> = ({ onSave, onOpenInEditor, onCancel }) => {
   const [mode, setMode] = useState<'MIC' | 'SYSTEM' | 'IMPORT'>('MIC');
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  // Audio stream & recording
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
-  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
-  const [dataArray, setDataArray] = useState<Uint8Array | null>(null);
-  
-  // Import Mode State
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedDuration, setRecordedDuration] = useState(0);
+  const [recordingName, setRecordingName] = useState('');
+
+  // Audio settings
+  const [echoCancellation, setEchoCancellation] = useState(true);
+  const [noiseSuppression, setNoiseSuppression] = useState(true);
+  const [visualizerType, setVisualizerType] = useState<'bars' | 'wave'>('bars');
+  const [inputGain, setInputGain] = useState(1.0);
+  const [peakLevel, setPeakLevel] = useState(0); // 0 to 1
+
+  // Post-recording preview playback
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [previewTime, setPreviewTime] = useState(0);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Import mode
+  const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Canvas & Audio Context
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const animFrameRef = useRef<number | null>(null);
 
-  // Detect iOS for UI hints
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
 
-  // Setup Audio Visualization
+  // Cleanup on unmount
   useEffect(() => {
-    if (!stream) return;
+    return () => {
+      stopAllMedia();
+    };
+  }, []);
 
-    // Use a try-catch for AudioContext creation as browsers impose limits
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioContext = new AudioContextClass();
-      
-      // For system audio which might include video tracks, we explicitly grab audio tracks
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        // This might happen momentarily during setup or if no audio track exists
-        return;
-      }
-      
-      // Create a new stream just for the analyser to avoid issues with video tracks
-      const audioOnlyStream = new MediaStream(audioTracks);
-      const source = audioContext.createMediaStreamSource(audioOnlyStream);
-      const analyserNode = audioContext.createAnalyser();
-      
-      analyserNode.fftSize = 256;
-      source.connect(analyserNode);
-      
-      const bufferLength = analyserNode.frequencyBinCount;
-      const dataArrayUint8 = new Uint8Array(bufferLength);
-      
-      setAnalyser(analyserNode);
-      setDataArray(dataArrayUint8);
-
-      return () => {
-        if (audioContext.state !== 'closed') {
-          audioContext.close();
-        }
-      };
-    } catch (e) {
-      console.error("Error setting up visualization:", e);
+  const stopAllMedia = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
     }
-  }, [stream]);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+  };
 
-  // Draw Waveform
+  // Setup Visualizer & Gain
+  const setupAudioGraph = (stream: MediaStream) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioCtx();
+      audioContextRef.current = audioCtx;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = inputGain;
+      gainNodeRef.current = gainNode;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
+      analyserRef.current = analyser;
+
+      source.connect(gainNode);
+      gainNode.connect(analyser);
+
+      drawVisualizer();
+    } catch (err) {
+      console.warn('Could not setup audio visualizer graph:', err);
+    }
+  };
+
+  // Update gain when slider changes
   useEffect(() => {
-    if (!analyser || !dataArray || !canvasRef.current || !isRecording) return;
-    
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = inputGain;
+    }
+  }, [inputGain]);
+
+  // Visualizer loop
+  const drawVisualizer = () => {
+    if (!canvasRef.current || !analyserRef.current) return;
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const draw = () => {
-      animationRef.current = requestAnimationFrame(draw);
-      analyser.getByteFrequencyData(dataArray);
+    const analyser = analyserRef.current;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
 
-      ctx.fillStyle = '#0f172a'; // Clear with background color
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const render = () => {
+      animFrameRef.current = requestAnimationFrame(render);
+      const width = canvas.width;
+      const height = canvas.height;
 
-      const barWidth = (canvas.width / dataArray.length) * 2.5;
-      let barHeight;
-      let x = 0;
+      ctx.clearRect(0, 0, width, height);
 
-      for(let i = 0; i < dataArray.length; i++) {
-        barHeight = dataArray[i] / 2;
-        
-        const r = barHeight + 25 * (i/dataArray.length);
-        const g = 250 * (i/dataArray.length);
-        const b = 50;
+      // Background subtle grid
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, width, height);
 
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+      if (visualizerType === 'bars') {
+        analyser.getByteFrequencyData(dataArray);
 
-        x += barWidth + 1;
+        // Calculate peak level for VU meter
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / bufferLength / 255;
+        setPeakLevel(Math.min(1, avg * 1.8));
+
+        const barCount = 48;
+        const barWidth = (width / barCount) - 3;
+        const step = Math.floor(bufferLength / barCount);
+
+        for (let i = 0; i < barCount; i++) {
+          const val = dataArray[i * step] || 0;
+          const barHeight = (val / 255) * (height - 16);
+          const x = i * (barWidth + 3) + 4;
+          const y = height - barHeight - 8;
+
+          // Color gradient logic: sky to cyan/pink
+          const ratio = i / barCount;
+          const r = Math.floor(14 + ratio * 220);
+          const g = Math.floor(165 - ratio * 40);
+          const b = Math.floor(233 + ratio * 20);
+
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          ctx.beginPath();
+          ctx.roundRect(x, y, Math.max(2, barWidth), Math.max(3, barHeight), [3, 3, 0, 0]);
+          ctx.fill();
+        }
+      } else {
+        // Oscilloscope Waveform mode
+        analyser.getByteTimeDomainData(dataArray);
+
+        // Peak estimation
+        let maxDev = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const dev = Math.abs(dataArray[i] - 128);
+          if (dev > maxDev) maxDev = dev;
+        }
+        setPeakLevel(Math.min(1, maxDev / 128));
+
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = '#38bdf8';
+        ctx.beginPath();
+
+        const sliceWidth = width / bufferLength;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = (v * height) / 2;
+
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+          x += sliceWidth;
+        }
+
+        ctx.stroke();
       }
     };
 
-    draw();
-
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [analyser, dataArray, isRecording]);
+    render();
+  };
 
   const startRecording = async () => {
     try {
@@ -114,58 +223,86 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
       let streamToRecord: MediaStream;
 
       if (mode === 'SYSTEM') {
-        // System audio via getDisplayMedia
-        try {
-            sourceStream = await navigator.mediaDevices.getDisplayMedia({
-                video: true, 
-                audio: true 
-            });
-        } catch (err) {
-             // User likely cancelled the prompt
-             return;
-        }
-
-        // Check if user actually shared audio
-        if (sourceStream.getAudioTracks().length === 0) {
-          // Stop stream immediately if no audio
-          sourceStream.getTracks().forEach(t => t.stop());
-          alert("No system audio detected. Please ensure you check 'Share tab audio' or 'Share system audio' in the popup.");
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+          alert('Screen/System audio capture is not supported in this browser.');
           return;
         }
-        
-        // Fix: MediaRecorder with audio mimeType will fail if stream has video tracks.
-        streamToRecord = new MediaStream(sourceStream.getAudioTracks());
 
+        try {
+          sourceStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+        } catch {
+          return; // User cancelled display media dialog
+        }
+
+        const audioTracks = sourceStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          sourceStream.getTracks().forEach((t) => t.stop());
+          alert('No audio track detected! Please check "Share tab audio" or "Share system audio" in the screen picker dialog.');
+          return;
+        }
+
+        streamToRecord = new MediaStream(audioTracks);
       } else {
-        // Mic/Aux audio
-        sourceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Microphone
+        const constraints: MediaStreamConstraints = {
+          audio: {
+            echoCancellation,
+            noiseSuppression,
+            autoGainControl: true,
+            sampleRate: 48000,
+          },
+        };
+        sourceStream = await navigator.mediaDevices.getUserMedia(constraints);
         streamToRecord = sourceStream;
       }
 
-      setStream(sourceStream); // Store full stream to stop everything later
+      streamRef.current = sourceStream;
+      setupAudioGraph(streamToRecord);
 
-      // Determine optimal mimeType
-      let mimeType = '';
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        mimeType = 'audio/webm;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-        mimeType = 'audio/webm';
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        mimeType = 'audio/mp4';
-      }
-        
-      const options = mimeType ? { mimeType } : undefined;
-      const recorder = new MediaRecorder(streamToRecord, options);
+      // Determine supported mime type
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+        'audio/aac',
+      ];
+      const selectedMime = mimeTypes.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+
+      const recorder = new MediaRecorder(streamToRecord, selectedMime ? { mimeType: selectedMime } : undefined);
+      const chunks: Blob[] = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          setRecordedChunks((prev) => [...prev, e.data]);
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
         }
       };
 
-      recorder.start(100); // Collect 100ms chunks
+      recorder.onstop = async () => {
+        const finalBlob = new Blob(chunks, { type: selectedMime || 'audio/webm' });
+        setRecordedChunks(chunks);
+        setRecordedBlob(finalBlob);
+
+        const metadata = await getAudioMetadata(finalBlob);
+        const finalDuration = metadata.duration > 0 ? metadata.duration : duration;
+        setRecordedDuration(finalDuration);
+
+        const defaultName = `Recording_${new Date().toISOString().slice(0, 19).replace('T', '_')}`;
+        setRecordingName(defaultName);
+      };
+
+      recorder.start(100);
       setMediaRecorder(recorder);
       setIsRecording(true);
+      setIsPaused(false);
+      setDuration(0);
 
       // Timer
       const startTime = Date.now();
@@ -173,22 +310,35 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
         setDuration(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
 
-      // Handle stream end (user stops sharing screen or clicks "Stop sharing" native browser UI)
-      sourceStream.getTracks().forEach(track => {
+      // Listen for stream ended (e.g. user clicks "Stop Sharing" on Chrome tab)
+      sourceStream.getTracks().forEach((track) => {
         track.onended = () => {
           stopRecording();
         };
       });
-
     } catch (err: any) {
-      console.error("Error starting recording:", err);
+      console.error('Recording initialization error:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        alert("Permission denied. Please allow microphone or screen recording permissions in your browser settings.");
-      } else if (err.toString().includes('display-capture')) {
-        alert("System recording is not supported on this device. Please use the 'Import File' mode.");
+        alert('Permission denied. Please grant audio/mic access in your browser settings.');
       } else {
         alert(`Could not start recording: ${err.message || err}`);
       }
+    }
+  };
+
+  const togglePauseResume = () => {
+    if (!mediaRecorder) return;
+    if (mediaRecorder.state === 'recording') {
+      mediaRecorder.pause();
+      setIsPaused(true);
+      if (timerRef.current) clearInterval(timerRef.current);
+    } else if (mediaRecorder.state === 'paused') {
+      mediaRecorder.resume();
+      setIsPaused(false);
+      const resumeTime = Date.now() - duration * 1000;
+      timerRef.current = window.setInterval(() => {
+        setDuration(Math.floor((Date.now() - resumeTime) / 1000));
+      }, 1000);
     }
   };
 
@@ -196,214 +346,464 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onCancel }) => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
     }
-    // Stop all tracks on the source stream (this stops the "Sharing..." banner)
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
     }
+
     setIsRecording(false);
+    setIsPaused(false);
+    setPeakLevel(0);
   };
 
-  const handleSave = () => {
-    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-    const name = `Recording_${new Date().toISOString().slice(0, 19).replace('T', '_')}`;
-    onSave(blob, name, 'recording');
+  const handleReset = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setRecordedBlob(null);
+    setRecordedChunks([]);
+    setDuration(0);
+    setRecordedDuration(0);
+    setIsPreviewPlaying(false);
+    setPreviewTime(0);
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleSaveToLibrary = () => {
+    if (!recordedBlob) return;
+    const name = recordingName.trim() || `Recording_${Date.now()}`;
+    onSave(recordedBlob, name, 'recording', recordedDuration);
+  };
 
-    setIsProcessing(true);
+  const handleOpenStudio = () => {
+    if (!recordedBlob) return;
+    const name = recordingName.trim() || `Recording_${Date.now()}`;
+    if (onOpenInEditor) {
+      onOpenInEditor(recordedBlob, name);
+    } else {
+      onSave(recordedBlob, name, 'recording', recordedDuration);
+    }
+  };
+
+  const togglePreviewPlayback = () => {
+    if (!recordedBlob) return;
+
+    if (isPreviewPlaying && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setIsPreviewPlaying(false);
+    } else {
+      if (!previewAudioRef.current) {
+        const audio = new Audio(URL.createObjectURL(recordedBlob));
+        previewAudioRef.current = audio;
+
+        audio.ontimeupdate = () => {
+          setPreviewTime(audio.currentTime);
+        };
+        audio.onended = () => {
+          setIsPreviewPlaying(false);
+          setPreviewTime(0);
+        };
+      }
+      previewAudioRef.current.play();
+      setIsPreviewPlaying(true);
+    }
+  };
+
+  const processFile = async (file: File) => {
+    setIsProcessingFile(true);
     try {
-      const blob = await extractAudioFromFile(file);
-      // Strip extension from filename
-      const name = file.name.replace(/\.[^/.]+$/, "");
-      onSave(blob, name, 'upload');
+      const { blob, duration: fileDuration } = await extractAudioFromFile(file);
+      const cleanName = file.name.replace(/\.[^/.]+$/, '');
+      onSave(blob, cleanName, 'upload', fileDuration);
     } catch (err: any) {
-      alert(err.message || "Failed to extract audio from file");
+      alert(err.message || 'Failed to extract audio from file.');
     } finally {
-      setIsProcessing(false);
+      setIsProcessingFile(false);
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      processFile(e.dataTransfer.files[0]);
     }
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 text-white p-6 max-w-4xl mx-auto w-full">
-      <div className="mb-8 text-center">
-        <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-pink-500 mb-2">
-          New Recording
-        </h2>
-        <p className="text-slate-400">Capture system audio, microphone, or extract from video</p>
-      </div>
+    <div className="flex flex-col h-full bg-slate-900 text-slate-100 p-4 md:p-8 max-w-5xl mx-auto w-full">
+      {/* Top Header */}
+      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-800 pb-5">
+        <div>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Audio Studio Recorder</h2>
+          <p className="text-sm text-slate-400 mt-0.5">
+            Capture crystal-clear microphone, browser tabs, or extract audio from videos
+          </p>
+        </div>
 
-      {/* Mode Selection */}
-      <div className="flex flex-wrap justify-center gap-4 mb-8">
-        <button
-          onClick={() => !isRecording && setMode('MIC')}
-          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
-            mode === 'MIC' 
-              ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/30' 
-              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-          } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          <Mic size={20} />
-          <span>Mic</span>
-        </button>
-        
-        {/* System Audio Button (Hidden/Disabled on iOS ideally, but we'll show it with improved handling) */}
-        {!isIOS && (
-          <button
-            onClick={() => !isRecording && setMode('SYSTEM')}
-            className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
-              mode === 'SYSTEM' 
-                ? 'bg-pink-500 text-white shadow-lg shadow-pink-500/30' 
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-            } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <Monitor size={20} />
-            <span>System / Tab</span>
-          </button>
-        )}
+        {/* Mode Selector */}
+        {!recordedBlob && !isRecording && (
+          <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 shrink-0">
+            <button
+              onClick={() => setMode('MIC')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wide uppercase transition-all ${
+                mode === 'MIC'
+                  ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Mic size={15} />
+              <span>Microphone</span>
+            </button>
 
-        <button
-          onClick={() => !isRecording && setMode('IMPORT')}
-          className={`flex items-center gap-2 px-4 md:px-6 py-3 rounded-xl transition-all ${
-            mode === 'IMPORT' 
-              ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/30' 
-              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-          } ${isRecording ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          <Upload size={20} />
-          <span>Import / iOS</span>
-        </button>
-      </div>
-
-      {/* Visualization Canvas / Drop Zone */}
-      <div className="flex-1 bg-slate-800 rounded-2xl p-4 mb-8 relative overflow-hidden border border-slate-700 shadow-inner min-h-[200px] flex flex-col items-center justify-center">
-        
-        {mode === 'IMPORT' ? (
-          <div className="text-center p-6 w-full h-full flex flex-col items-center justify-center">
-            {isProcessing ? (
-              <div className="flex flex-col items-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4"></div>
-                <p className="text-indigo-400 font-medium">Extracting Audio...</p>
-              </div>
-            ) : (
-              <>
-                <div onClick={() => fileInputRef.current?.click()} className="cursor-pointer group flex flex-col items-center">
-                  <div className="w-20 h-20 bg-slate-700 rounded-full flex items-center justify-center mb-4 group-hover:bg-indigo-500/20 group-hover:text-indigo-400 transition-all text-slate-400">
-                    <FileAudio size={40} />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2">Import Video or Audio</h3>
-                  <p className="text-slate-400 max-w-sm mb-6">
-                    Upload a screen recording or video file to extract the audio automatically. 
-                  </p>
-                  <button className="px-6 py-3 bg-indigo-500 hover:bg-indigo-400 text-white rounded-xl font-medium shadow-lg shadow-indigo-500/30 transition-all">
-                    Select File
-                  </button>
-                  <input 
-                    type="file" 
-                    ref={fileInputRef}
-                    onChange={handleImport}
-                    className="hidden" 
-                    accept="video/*,audio/*"
-                  />
-                </div>
-                
-                {isIOS && (
-                  <div className="mt-8 p-4 bg-slate-900/50 rounded-xl border border-slate-700 text-sm text-left max-w-md">
-                     <div className="flex items-center gap-2 text-indigo-400 mb-2 font-bold">
-                        <Smartphone size={16} />
-                        <span>How to record YouTube/Spotify on iOS:</span>
-                     </div>
-                     <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                       <li>Go to Control Center and start <strong>Screen Recording</strong></li>
-                       <li>Open YouTube/Spotify and play your content</li>
-                       <li>Stop recording (video saves to Photos)</li>
-                       <li>Come back here and <strong>Select File</strong></li>
-                     </ol>
-                  </div>
-                )}
-              </>
+            {!isIOS && (
+              <button
+                onClick={() => setMode('SYSTEM')}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wide uppercase transition-all ${
+                  mode === 'SYSTEM'
+                    ? 'bg-pink-500 text-white shadow-sm shadow-pink-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Monitor size={15} />
+                <span>System / Tab</span>
+              </button>
             )}
+
+            <button
+              onClick={() => setMode('IMPORT')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold tracking-wide uppercase transition-all ${
+                mode === 'IMPORT'
+                  ? 'bg-indigo-500 text-white shadow-sm shadow-indigo-500/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+              }`}
+            >
+              <Upload size={15} />
+              <span>Import File</span>
+            </button>
           </div>
-        ) : (
-          <>
-            <canvas 
-              ref={canvasRef} 
-              width={800} 
-              height={200} 
-              className="w-full h-full object-cover rounded-xl absolute inset-0"
-            />
-            {!isRecording && recordedChunks.length === 0 && (
-              <div className="absolute inset-0 flex items-center justify-center text-slate-500 pointer-events-none z-10">
-                <span className="bg-slate-900/80 px-4 py-2 rounded-lg backdrop-blur-sm border border-slate-700">
-                  {mode === 'SYSTEM' ? 'Ready to Capture System Audio' : 'Ready to Record Mic'}
+        )}
+      </div>
+
+      {/* Main Container */}
+      {mode === 'IMPORT' && !recordedBlob ? (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleFileDrop}
+          className={`flex-1 bg-slate-950/60 rounded-2xl border-2 border-dashed p-8 md:p-12 flex flex-col items-center justify-center text-center transition-all ${
+            dragOver ? 'border-sky-500 bg-sky-500/5' : 'border-slate-800 hover:border-slate-700'
+          }`}
+        >
+          {isProcessingFile ? (
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-12 h-12 border-3 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+              <div className="text-center">
+                <p className="font-semibold text-white">Extracting Audio Track...</p>
+                <p className="text-xs text-slate-400 mt-1">Decoding audio frames into lossless PCM</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="cursor-pointer group flex flex-col items-center max-w-md"
+              >
+                <div className="w-16 h-16 bg-slate-900 rounded-2xl border border-slate-800 flex items-center justify-center text-sky-400 group-hover:scale-105 group-hover:border-sky-500/50 transition-all shadow-md mb-4">
+                  <FileAudio size={32} />
+                </div>
+                <h3 className="text-lg font-bold text-white mb-1">Upload Audio or Video</h3>
+                <p className="text-xs text-slate-400 leading-relaxed mb-6">
+                  Drop MP4, MOV, WEBM, MP3, WAV, AAC, or screen recording files here to extract high-fidelity audio.
+                </p>
+                <button
+                  type="button"
+                  className="px-5 py-2.5 bg-sky-500 hover:bg-sky-400 text-white rounded-xl text-sm font-semibold shadow-md shadow-sky-500/20 transition-all"
+                >
+                  Choose File
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      processFile(e.target.files[0]);
+                    }
+                  }}
+                  accept="audio/*,video/*"
+                  className="hidden"
+                />
+              </div>
+
+              {isIOS && (
+                <div className="mt-8 max-w-md p-4 bg-slate-900/80 rounded-xl border border-slate-800 text-left text-xs">
+                  <div className="flex items-center gap-2 text-indigo-400 font-semibold mb-2">
+                    <Smartphone size={16} />
+                    <span>How to capture Spotify / YouTube on iOS:</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1.5 text-slate-400">
+                    <li>Swipe down for <strong>Control Center</strong> & start <strong>Screen Recording</strong>.</li>
+                    <li>Play your desired music or video tab.</li>
+                    <li>Stop screen recording (saved to Photos).</li>
+                    <li>Tap <strong>Choose File</strong> above and select the video!</li>
+                  </ol>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : recordedBlob ? (
+        /* Post-Recording Review State */
+        <div className="flex-1 bg-slate-950/70 border border-slate-800 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-xl">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-center text-emerald-400">
+                  <CheckCircle2 size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Recording Completed</h3>
+                  <p className="text-xs text-slate-400">
+                    Duration: {formatTime(recordedDuration)} • Size: {formatFileSize(recordedBlob.size)}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-lg border border-slate-800 transition-colors"
+              >
+                <RotateCcw size={14} />
+                <span>Discard</span>
+              </button>
+            </div>
+
+            {/* Name Input */}
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Track Name
+              </label>
+              <input
+                type="text"
+                value={recordingName}
+                onChange={(e) => setRecordingName(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 focus:border-sky-500 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none transition-colors"
+                placeholder="Enter recording title..."
+              />
+            </div>
+
+            {/* Inline Preview Player */}
+            <div className="bg-slate-900/90 rounded-xl p-5 border border-slate-800">
+              <div className="flex items-center justify-between gap-4">
+                <button
+                  onClick={togglePreviewPlayback}
+                  className="w-12 h-12 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex items-center justify-center shadow-lg shadow-sky-500/20 transition-all shrink-0"
+                >
+                  {isPreviewPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="ml-0.5" />}
+                </button>
+                <div className="flex-1">
+                  <div className="flex justify-between text-xs font-mono text-slate-400 mb-1.5">
+                    <span>{formatTimePrecise(previewTime)}</span>
+                    <span>{formatTimePrecise(recordedDuration)}</span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-sky-500 h-full transition-all"
+                      style={{
+                        width: `${recordedDuration > 0 ? (previewTime / recordedDuration) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-6 border-t border-slate-800 mt-6">
+            <button
+              onClick={handleSaveToLibrary}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-semibold border border-slate-700 transition-all"
+            >
+              <Save size={16} />
+              <span>Save to Library</span>
+            </button>
+            <button
+              onClick={handleOpenStudio}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-white rounded-xl text-sm font-semibold shadow-lg shadow-sky-500/20 transition-all"
+            >
+              <Scissors size={16} />
+              <span>Open in Studio Editor</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* Live Recording / Ready State */
+        <div className="flex-1 flex flex-col gap-6">
+          {/* Visualizer Canvas & Peak Meter */}
+          <div className="relative flex-1 bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden min-h-[220px] flex flex-col justify-end p-4">
+            <canvas ref={canvasRef} width={800} height={200} className="absolute inset-0 w-full h-full object-cover" />
+
+            {!isRecording && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-6 bg-slate-950/70 backdrop-blur-xs">
+                <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-sky-400 mb-3 shadow-inner">
+                  {mode === 'SYSTEM' ? <Monitor size={28} /> : <Mic size={28} />}
+                </div>
+                <h3 className="text-base font-bold text-white mb-1">
+                  {mode === 'SYSTEM' ? 'Ready to Capture System / Tab Audio' : 'Microphone Ready'}
+                </h3>
+                <p className="text-xs text-slate-400 text-center max-w-sm">
+                  {mode === 'SYSTEM'
+                    ? 'Press record and select the browser tab (Spotify, YouTube, Soundcloud) you wish to record.'
+                    : 'Press the record button below to begin recording studio-quality voice and audio.'}
+                </p>
+              </div>
+            )}
+
+            {/* Peak Meter Bar at bottom */}
+            {isRecording && (
+              <div className="relative z-20 flex items-center gap-3 bg-slate-900/90 backdrop-blur-sm px-4 py-2 rounded-xl border border-slate-800/80 mt-auto">
+                <Volume2 size={16} className="text-slate-400 shrink-0" />
+                <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden flex gap-0.5">
+                  <div
+                    className="h-full bg-emerald-500 transition-all duration-75"
+                    style={{ width: `${Math.min(70, peakLevel * 100)}%` }}
+                  />
+                  {peakLevel > 0.7 && (
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-75"
+                      style={{ width: `${Math.min(20, (peakLevel - 0.7) * 100)}%` }}
+                    />
+                  )}
+                  {peakLevel > 0.9 && (
+                    <div
+                      className="h-full bg-rose-500 transition-all duration-75"
+                      style={{ width: `${Math.min(10, (peakLevel - 0.9) * 100)}%` }}
+                    />
+                  )}
+                </div>
+                <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                  {peakLevel > 0.9 ? 'PEAK' : `${Math.round(peakLevel * 100)}%`}
                 </span>
               </div>
             )}
-          </>
-        )}
-      </div>
-
-      {/* Controls (Only show for MIC/SYSTEM modes) */}
-      {mode !== 'IMPORT' && (
-        <div className="flex flex-col items-center gap-6">
-          <div className="text-4xl font-mono font-bold tracking-wider text-slate-200">
-            {formatTime(duration)}
           </div>
 
-          <div className="flex items-center gap-4">
-            {!isRecording && recordedChunks.length === 0 && (
-              <button
-                onClick={startRecording}
-                className="w-16 h-16 bg-red-500 hover:bg-red-400 rounded-full flex items-center justify-center shadow-lg shadow-red-500/40 transition-transform hover:scale-105 active:scale-95"
-              >
-                <div className="w-6 h-6 bg-white rounded-full"></div>
-              </button>
-            )}
-
+          {/* Timer Display */}
+          <div className="flex flex-col items-center">
+            <div className="font-mono text-4xl md:text-5xl font-bold tracking-tight text-white flex items-center gap-2">
+              <span>{formatTime(duration)}</span>
+              {isPaused && (
+                <span className="text-xs uppercase px-2 py-0.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-md font-sans">
+                  Paused
+                </span>
+              )}
+            </div>
             {isRecording && (
-              <button
-                onClick={stopRecording}
-                className="w-16 h-16 bg-slate-700 hover:bg-slate-600 rounded-full flex items-center justify-center border-2 border-slate-500 transition-transform hover:scale-105 active:scale-95"
-              >
-                <Square size={24} className="fill-white text-white" />
-              </button>
-            )}
-
-            {!isRecording && recordedChunks.length > 0 && (
-              <div className="flex gap-4">
-                 <button
-                  onClick={() => {
-                    setRecordedChunks([]);
-                    setDuration(0);
-                    startRecording();
-                  }}
-                  className="px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors"
-                >
-                  Discard & Retry
-                </button>
-                <button
-                  onClick={handleSave}
-                  className="flex items-center gap-2 px-8 py-3 bg-green-500 hover:bg-green-400 text-white rounded-xl font-medium shadow-lg shadow-green-500/30 transition-transform hover:scale-105"
-                >
-                  <Save size={20} />
-                  Save Recording
-                </button>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
+                <span className="text-xs text-rose-400 font-medium">
+                  {isPaused ? 'Recording Paused' : 'Live Recording...'}
+                </span>
               </div>
             )}
           </div>
-          
+
+          {/* Controls */}
+          <div className="flex items-center justify-center gap-4">
+            {!isRecording ? (
+              <button
+                onClick={startRecording}
+                className="group relative flex items-center justify-center w-16 h-16 bg-rose-500 hover:bg-rose-400 rounded-full shadow-lg shadow-rose-500/30 transition-transform active:scale-95"
+                title="Start Recording"
+              >
+                <div className="w-6 h-6 bg-white rounded-full transition-transform group-hover:scale-110" />
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={togglePauseResume}
+                  className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-semibold border border-slate-700 transition-all flex items-center gap-2"
+                >
+                  {isPaused ? <Play size={16} /> : <Pause size={16} />}
+                  <span>{isPaused ? 'Resume' : 'Pause'}</span>
+                </button>
+
+                <button
+                  onClick={stopRecording}
+                  className="px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-rose-600/30 transition-all flex items-center gap-2"
+                >
+                  <Square size={16} className="fill-white" />
+                  <span>Stop Recording</span>
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Recording Options & System Notice */}
+          <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80 flex flex-wrap items-center justify-between gap-4 text-xs">
+            <div className="flex items-center gap-6">
+              <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={noiseSuppression}
+                  onChange={(e) => setNoiseSuppression(e.target.checked)}
+                  disabled={isRecording}
+                  className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0"
+                />
+                <span>Noise Suppression</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer text-slate-400 hover:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={echoCancellation}
+                  onChange={(e) => setEchoCancellation(e.target.checked)}
+                  disabled={isRecording}
+                  className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0"
+                />
+                <span>Echo Cancellation</span>
+              </label>
+            </div>
+
+            <div className="flex items-center gap-3 text-slate-400">
+              <span>Visualizer:</span>
+              <button
+                onClick={() => setVisualizerType('bars')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                  visualizerType === 'bars' ? 'bg-slate-800 text-sky-400' : 'hover:bg-slate-900'
+                }`}
+              >
+                Spectrum
+              </button>
+              <button
+                onClick={() => setVisualizerType('wave')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                  visualizerType === 'wave' ? 'bg-slate-800 text-sky-400' : 'hover:bg-slate-900'
+                }`}
+              >
+                Oscilloscope
+              </button>
+            </div>
+          </div>
+
           {mode === 'SYSTEM' && !isRecording && (
-             <div className="flex items-center gap-2 text-yellow-500 text-sm bg-yellow-500/10 px-4 py-2 rounded-lg max-w-lg text-center">
-               <AlertCircle size={16} className="shrink-0" />
-               <span>
-                 <strong>Mac Users:</strong> Select the specific <strong>Chrome Tab</strong> you want to record. System-wide audio capture is not supported without virtual drivers.
-               </span>
-             </div>
+            <div className="flex items-start gap-2.5 text-amber-400 bg-amber-500/10 border border-amber-500/20 px-4 py-3 rounded-xl text-xs">
+              <Info size={16} className="shrink-0 mt-0.5" />
+              <span>
+                <strong>Chrome / Edge / Brave:</strong> In the popup, choose the <strong>"Chrome Tab"</strong> tab and
+                ensure <strong>"Share tab audio"</strong> toggle is enabled to record direct digital music.
+              </span>
+            </div>
           )}
         </div>
       )}
