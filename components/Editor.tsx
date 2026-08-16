@@ -26,6 +26,7 @@ import {
   Plus,
   HelpCircle,
   Clock,
+  FileText,
 } from 'lucide-react';
 import {
   bufferToWav,
@@ -46,6 +47,7 @@ interface EditorProps {
   onClose: () => void;
   onSave: (blob: Blob, name: string) => void;
   onSaveAsCopy?: (blob: Blob, name: string) => void;
+  onTranscribe?: (blob: Blob, name: string) => void;
 }
 
 interface HistoryItem {
@@ -59,6 +61,7 @@ const Editor: React.FC<EditorProps> = ({
   onClose,
   onSave,
   onSaveAsCopy,
+  onTranscribe,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -490,6 +493,24 @@ const Editor: React.FC<EditorProps> = ({
             <FileDown size={15} />
             <span className="hidden md:inline">Export WAV</span>
           </button>
+
+          {onTranscribe && (
+            <button
+              onClick={() => {
+                if (currentBuffer) {
+                  const blob = bufferToWav(currentBuffer);
+                  onTranscribe(blob, fileName);
+                } else if (initialBlob) {
+                  onTranscribe(initialBlob, fileName);
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-purple-400 hover:text-purple-300 bg-slate-950 hover:bg-slate-800 rounded-lg border border-purple-500/30 transition-colors"
+              title="Transcribe current audio to text with AI"
+            >
+              <FileText size={15} />
+              <span className="hidden md:inline">Transcribe</span>
+            </button>
+          )}
 
           <button
             onClick={handleSaveAsCopy}

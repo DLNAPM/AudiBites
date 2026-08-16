@@ -6,6 +6,12 @@ export enum AppView {
 
 export type TrackSource = 'recording' | 'upload' | 'edited' | 'sample';
 
+export interface TranscriptSegment {
+  time?: string;
+  speaker?: string;
+  text: string;
+}
+
 export interface AudioTrack {
   id: string;
   name: string;
@@ -16,6 +22,11 @@ export interface AudioTrack {
   size?: number; // size in bytes
   sampleRate?: number;
   channels?: number;
+  transcription?: string;
+  transcriptTimestamps?: TranscriptSegment[];
+  transcriptSummary?: string;
+  transcriptLanguage?: string;
+  transcriptCreatedAt?: number;
 }
 
 export interface AudioRecorderState {

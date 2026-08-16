@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Mic, ListMusic, Scissors, HelpCircle, Plus, Music2, Sparkles, Check } from 'lucide-react';
+import { Mic, ListMusic, Scissors, HelpCircle, Plus, Music2, Sparkles, Check, FileText } from 'lucide-react';
 import Recorder from './components/Recorder';
 import Library from './components/Library';
 import Editor from './components/Editor';
 import Help from './components/Help';
+import TranscribeModal from './components/TranscribeModal';
 import { AppView, AudioTrack } from './types';
 import { APP_NAME } from './constants';
 import {
@@ -24,6 +25,13 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.LIBRARY);
   const [tracks, setTracks] = useState<AudioTrack[]>([]);
   const [editingTrack, setEditingTrack] = useState<AudioTrack | null>(null);
+  const [transcribingTrack, setTranscribingTrack] = useState<{
+    blob: Blob;
+    name: string;
+    duration?: number;
+    id?: string;
+    transcription?: string;
+  } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -189,6 +197,61 @@ const App: React.FC = () => {
     await addTrack(blob, name, 'upload');
   };
 
+  // Upload and immediately open transcription
+  const handleUploadAndTranscribe = async (file: File) => {
+    const blob = new Blob([file], { type: file.type || 'audio/wav' });
+    const name = file.name.replace(/\.[^/.]+$/, '');
+    const meta = await getAudioMetadata(blob);
+    const newTrack: AudioTrack = {
+      id: crypto.randomUUID(),
+      name: name.trim() || `Audio_${Date.now()}`,
+      blob,
+      createdAt: Date.now(),
+      duration: meta.duration,
+      source: 'upload',
+      size: blob.size,
+      sampleRate: meta.sampleRate,
+      channels: meta.channels,
+    };
+
+    setTracks((prev) => [newTrack, ...prev]);
+    await saveTrackToStorage(newTrack);
+    setTranscribingTrack({
+      id: newTrack.id,
+      name: newTrack.name,
+      blob: newTrack.blob,
+      duration: newTrack.duration,
+    });
+    showToast(`Uploaded "${newTrack.name}" — Ready to transcribe`, 'info');
+  };
+
+  // Open transcribe modal for a track
+  const handleOpenTranscribe = (
+    target: AudioTrack | { blob: Blob; name: string; duration?: number; id?: string; transcription?: string }
+  ) => {
+    setTranscribingTrack({
+      id: 'id' in target ? target.id : undefined,
+      name: target.name,
+      blob: target.blob,
+      duration: target.duration,
+      transcription: 'transcription' in target ? target.transcription : undefined,
+    });
+  };
+
+  // Save transcription result to track
+  const handleSaveTranscriptionToTrack = async (id: string, transcription: string) => {
+    const target = tracks.find((t) => t.id === id);
+    if (!target) return;
+    const updated: AudioTrack = {
+      ...target,
+      transcription,
+      transcriptCreatedAt: Date.now(),
+    };
+    setTracks((prev) => prev.map((t) => (t.id === id ? updated : t)));
+    await updateTrackInStorage(updated);
+    showToast(`Transcription saved for "${target.name}"`);
+  };
+
   // Direct transition from Recorder to Editor
   const handleOpenRecordedInEditor = async (blob: Blob, name: string) => {
     const meta = await getAudioMetadata(blob);
@@ -308,6 +371,7 @@ const App: React.FC = () => {
           <Recorder
             onSave={(blob, name, source, dur) => addTrack(blob, name, source, dur)}
             onOpenInEditor={handleOpenRecordedInEditor}
+            onTranscribe={(blob, name) => handleOpenTranscribe({ blob, name })}
             onCancel={() => setCurrentView(AppView.LIBRARY)}
           />
         )}
@@ -319,6 +383,8 @@ const App: React.FC = () => {
             onBulkDelete={bulkDeleteTracks}
             onEdit={startEditing}
             onUpload={handleFileUpload}
+            onUploadAndTranscribe={handleUploadAndTranscribe}
+            onTranscribe={handleOpenTranscribe}
             onDuplicate={duplicateTrack}
             onRename={renameTrack}
             onAddSample={(sampleTrack) => {
@@ -339,9 +405,20 @@ const App: React.FC = () => {
             }}
             onSave={handleEditorSave}
             onSaveAsCopy={handleEditorSaveAsCopy}
+            onTranscribe={(blob, name) => handleOpenTranscribe({ blob, name, id: editingTrack.id })}
           />
         )}
       </main>
+
+      {/* Transcribe Modal */}
+      {transcribingTrack && (
+        <TranscribeModal
+          track={transcribingTrack}
+          isOpen={!!transcribingTrack}
+          onClose={() => setTranscribingTrack(null)}
+          onSaveToTrack={handleSaveTranscriptionToTrack}
+        />
+      )}
 
       {/* Help Modal */}
       {showHelp && <Help onClose={() => setShowHelp(false)} />}

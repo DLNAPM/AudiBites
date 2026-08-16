@@ -17,16 +17,18 @@ import {
   FileAudio,
   Smartphone,
   AlertTriangle,
+  FileText,
 } from 'lucide-react';
 import { formatTime, formatTimePrecise, formatFileSize, extractAudioFromFile, getAudioMetadata } from '../utils/audioUtils';
 
 interface RecorderProps {
   onSave: (blob: Blob, name: string, source: 'recording' | 'upload', duration?: number) => void;
   onOpenInEditor?: (blob: Blob, name: string) => void;
+  onTranscribe?: (blob: Blob, name: string) => void;
   onCancel: () => void;
 }
 
-const Recorder: React.FC<RecorderProps> = ({ onSave, onOpenInEditor, onCancel }) => {
+const Recorder: React.FC<RecorderProps> = ({ onSave, onOpenInEditor, onTranscribe, onCancel }) => {
   const [mode, setMode] = useState<'MIC' | 'SYSTEM' | 'IMPORT'>('MIC');
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -630,6 +632,20 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onOpenInEditor, onCancel })
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-6 border-t border-slate-800 mt-6">
+            {onTranscribe && (
+              <button
+                onClick={() => {
+                  if (recordedBlob) {
+                    const name = recordingName.trim() || `Recording_${Date.now()}`;
+                    onTranscribe(recordedBlob, name);
+                  }
+                }}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-purple-400 hover:text-purple-300 rounded-xl text-sm font-semibold border border-purple-500/30 transition-all"
+              >
+                <FileText size={16} />
+                <span>Transcribe to Text</span>
+              </button>
+            )}
             <button
               onClick={handleSaveToLibrary}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-semibold border border-slate-700 transition-all"
@@ -639,7 +655,7 @@ const Recorder: React.FC<RecorderProps> = ({ onSave, onOpenInEditor, onCancel })
             </button>
             <button
               onClick={handleOpenStudio}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-white rounded-xl text-sm font-semibold shadow-lg shadow-sky-500/20 transition-all"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-white rounded-xl text-sm font-semibold shadow-lg shadow-sky-500/20 transition-all"
             >
               <Scissors size={16} />
               <span>Open in Studio Editor</span>

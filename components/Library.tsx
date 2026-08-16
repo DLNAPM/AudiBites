@@ -21,6 +21,7 @@ import {
   Layers,
   HardDrive,
   SlidersHorizontal,
+  FileText,
 } from 'lucide-react';
 import { formatTime, formatTimePrecise, formatFileSize, createSampleTrack } from '../utils/audioUtils';
 
@@ -33,6 +34,8 @@ interface LibraryProps {
   onDuplicate?: (track: AudioTrack) => void;
   onRename?: (id: string, newName: string) => void;
   onAddSample?: (track: AudioTrack) => void;
+  onTranscribe?: (track: AudioTrack) => void;
+  onUploadAndTranscribe?: (file: File) => void;
 }
 
 const Library: React.FC<LibraryProps> = ({
@@ -44,6 +47,8 @@ const Library: React.FC<LibraryProps> = ({
   onDuplicate,
   onRename,
   onAddSample,
+  onTranscribe,
+  onUploadAndTranscribe,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterSource, setFilterSource] = useState<string>('ALL');
@@ -62,6 +67,7 @@ const Library: React.FC<LibraryProps> = ({
   // Multi-selection state
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadAndTranscribeInputRef = useRef<HTMLInputElement>(null);
 
   // Audio playback handler
   const handlePlay = (track: AudioTrack) => {
@@ -201,8 +207,16 @@ const Library: React.FC<LibraryProps> = ({
 
   // Filter & Sort logic
   const filteredTracks = tracks.filter((track) => {
-    const matchesSearch = track.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesSource = filterSource === 'ALL' || track.source === filterSource;
+    const matchesSearch =
+      track.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (track.transcription && track.transcription.toLowerCase().includes(searchQuery.toLowerCase()));
+    
+    let matchesSource = true;
+    if (filterSource === 'transcribed') {
+      matchesSource = !!track.transcription;
+    } else if (filterSource !== 'ALL') {
+      matchesSource = track.source === filterSource;
+    }
     return matchesSearch && matchesSource;
   });
 
@@ -226,7 +240,7 @@ const Library: React.FC<LibraryProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Demo Sound Generator Dropdown */}
           <div className="relative group">
             <button className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-950 hover:bg-slate-850 text-sky-400 rounded-xl border border-slate-800 text-xs font-semibold shadow-xs transition-colors">
@@ -254,6 +268,31 @@ const Library: React.FC<LibraryProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Upload & Transcribe Direct Action */}
+          <button
+            onClick={() => uploadAndTranscribeInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-950 hover:bg-slate-850 text-purple-400 hover:text-purple-300 border border-purple-500/30 rounded-xl text-xs font-semibold shadow-xs transition-colors"
+            title="Upload an audio file and transcribe it immediately to text"
+          >
+            <FileText size={14} />
+            <span>Upload & Transcribe</span>
+          </button>
+          <input
+            type="file"
+            ref={uploadAndTranscribeInputRef}
+            onChange={(e) => {
+              if (e.target.files && e.target.files[0]) {
+                if (onUploadAndTranscribe) {
+                  onUploadAndTranscribe(e.target.files[0]);
+                } else {
+                  onUpload(e.target.files[0]);
+                }
+              }
+            }}
+            className="hidden"
+            accept="audio/*,video/*"
+          />
 
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -286,7 +325,7 @@ const Library: React.FC<LibraryProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search audio clips..."
+              placeholder="Search audio clips or transcribed text..."
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
             />
             {searchQuery && (
@@ -301,7 +340,7 @@ const Library: React.FC<LibraryProps> = ({
 
           {/* Source Filter */}
           <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-            {['ALL', 'recording', 'upload', 'edited', 'sample'].map((src) => (
+            {['ALL', 'recording', 'upload', 'edited', 'sample', 'transcribed'].map((src) => (
               <button
                 key={src}
                 onClick={() => setFilterSource(src)}
@@ -311,7 +350,7 @@ const Library: React.FC<LibraryProps> = ({
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
                 }`}
               >
-                {src === 'ALL' ? 'All' : src}
+                {src === 'ALL' ? 'All' : src === 'transcribed' ? '📝 Transcribed' : src}
               </button>
             ))}
           </div>
@@ -438,6 +477,20 @@ const Library: React.FC<LibraryProps> = ({
 
                     {/* Quick Card Actions */}
                     <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                      {onTranscribe && (
+                        <button
+                          onClick={() => onTranscribe(track)}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            track.transcription
+                              ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-500/10'
+                              : 'text-slate-400 hover:text-purple-400 hover:bg-slate-900'
+                          }`}
+                          title={track.transcription ? 'View Saved Transcript' : 'Transcribe Audio with AI'}
+                        >
+                          <FileText size={15} />
+                        </button>
+                      )}
+
                       <button
                         onClick={() => onEdit(track)}
                         className="p-1.5 text-slate-400 hover:text-sky-400 hover:bg-slate-900 rounded-lg transition-colors"
@@ -512,18 +565,26 @@ const Library: React.FC<LibraryProps> = ({
                     </div>
                   )}
 
-                  {/* Metadata Chips */}
-                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 mb-4 font-mono">
+                  {/* Metadata Chips & Transcript Indicator */}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 mb-4 font-mono">
                     <span className="flex items-center gap-1">
                       <Clock size={11} className="text-slate-500" />
                       {formatTime(track.duration || 0)}
                     </span>
                     <span>•</span>
                     <span>{formatFileSize(track.size || track.blob.size)}</span>
-                    <span>•</span>
-                    <span className="text-slate-500 font-sans">
-                      {new Date(track.createdAt).toLocaleDateString()}
-                    </span>
+                    {track.transcription && (
+                      <>
+                        <span>•</span>
+                        <button
+                          onClick={() => onTranscribe?.(track)}
+                          className="flex items-center gap-1 text-purple-400 hover:text-purple-300 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20 text-[10px] font-sans font-medium"
+                        >
+                          <FileText size={10} />
+                          <span>Transcript</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -548,21 +609,34 @@ const Library: React.FC<LibraryProps> = ({
                   )}
 
                   <div className="flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => handlePlay(track)}
-                      className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-semibold text-xs transition-all ${
-                        isPlaying
-                          ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/30'
-                          : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
-                      }`}
-                    >
-                      {isPlaying ? (
-                        <Pause size={14} fill="currentColor" />
-                      ) : (
-                        <Play size={14} fill="currentColor" className="ml-0.5" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handlePlay(track)}
+                        className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-semibold text-xs transition-all ${
+                          isPlaying
+                            ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/30'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                        }`}
+                      >
+                        {isPlaying ? (
+                          <Pause size={14} fill="currentColor" />
+                        ) : (
+                          <Play size={14} fill="currentColor" className="ml-0.5" />
+                        )}
+                        <span>{isPlaying ? 'Pause' : 'Play'}</span>
+                      </button>
+
+                      {onTranscribe && (
+                        <button
+                          onClick={() => onTranscribe(track)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-purple-400 hover:text-purple-300 border border-purple-500/30 transition-colors"
+                          title="Transcribe Audio to Text"
+                        >
+                          <FileText size={13} />
+                          <span>{track.transcription ? 'Transcript' : 'Transcribe'}</span>
+                        </button>
                       )}
-                      <span>{isPlaying ? 'Pause' : 'Play'}</span>
-                    </button>
+                    </div>
 
                     <div className="flex items-center gap-1">
                       <button
