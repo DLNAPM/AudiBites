@@ -1,8 +1,6 @@
 import path from 'path';
 import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import express from 'express';
-import cors from 'cors';
 import { handleTranscription } from './server/transcribeHandler';
 
 function apiPlugin(env: Record<string, string>): Plugin {
@@ -17,25 +15,46 @@ function apiPlugin(env: Record<string, string>): Plugin {
         process.env.API_KEY = env.API_KEY;
       }
 
-      const apiApp = express();
-      apiApp.use(cors());
-      apiApp.use(express.json({ limit: '50mb' }));
-      apiApp.use(express.urlencoded({ limit: '50mb', extended: true }));
+      server.middlewares.use(async (req, res, next) => {
+        const rawUrl = req.url || '';
+        const pathname = rawUrl.split('?')[0];
 
-      apiApp.post('/api/transcribe', async (req, res) => {
-        try {
-          const result = await handleTranscription(req.body);
-          res.status(200).json(result);
-        } catch (err: any) {
-          console.error('API Error in dev server:', err);
-          res.status(500).json({
-            success: false,
-            error: err?.message || 'Transcription failed. Please check audio format.',
-          });
+        if (pathname === '/api/transcribe') {
+          if (req.method !== 'POST') {
+            res.statusCode = 405;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: 'Method Not Allowed' }));
+            return;
+          }
+
+          try {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+              chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+            }
+            const bodyStr = Buffer.concat(chunks).toString('utf-8');
+            const payload = bodyStr ? JSON.parse(bodyStr) : {};
+
+            const result = await handleTranscription(payload);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify(result));
+          } catch (err: any) {
+            console.error('API Error in dev server:', err);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(
+              JSON.stringify({
+                success: false,
+                error: err?.message || 'Transcription failed. Please check audio format and try again.',
+              })
+            );
+          }
+          return;
         }
-      });
 
-      server.middlewares.use(apiApp);
+        next();
+      });
     },
   };
 }

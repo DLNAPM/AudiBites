@@ -74,12 +74,16 @@ export async function transcribeAudio(
       );
     }
 
-    if (!response.ok || !data) {
-      throw new Error(data?.error || `Server responded with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(data?.error || `Server responded with error status ${response.status}`);
     }
 
-    if (!data.success && data.error) {
-      throw new Error(data.error);
+    if (!data) {
+      throw new Error('Server returned an empty transcription response.');
+    }
+
+    if (data.success === false) {
+      throw new Error(data.error || 'Failed to transcribe audio.');
     }
 
     return data;
