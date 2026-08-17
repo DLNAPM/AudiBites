@@ -50,6 +50,7 @@ export async function transcribeAudio(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
       body: JSON.stringify({
         audioBase64,
@@ -60,12 +61,23 @@ export async function transcribeAudio(
       }),
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `Server responded with status ${response.status}`);
+    const responseText = await response.text();
+    let data: any = null;
+    try {
+      data = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      // Body is not JSON (e.g. HTML or empty string)
+      throw new Error(
+        `Server returned an invalid response (${response.status} ${response.statusText}): ${
+          responseText ? responseText.slice(0, 120) : 'Empty response'
+        }`
+      );
     }
 
-    const data: TranscribeResult = await response.json();
+    if (!response.ok || !data) {
+      throw new Error(data?.error || `Server responded with status ${response.status}`);
+    }
+
     if (!data.success && data.error) {
       throw new Error(data.error);
     }
