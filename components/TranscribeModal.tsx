@@ -15,12 +15,17 @@ import {
   RefreshCw,
   Search,
   BookOpen,
+  Key,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { AudioTrack } from '../types';
 import {
   transcribeAudio,
   downloadTranscriptTxt,
   downloadTranscriptSrt,
+  getStoredApiKey,
+  setStoredApiKey,
   TranscribeOptions,
 } from '../utils/transcribeClient';
 import { formatTime, formatTimePrecise } from '../utils/audioUtils';
@@ -59,6 +64,11 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Optional custom API key support
+  const [apiKey, setApiKey] = useState<string>(() => getStoredApiKey());
+  const [showKeySettings, setShowKeySettings] = useState<boolean>(false);
+  const [apiKeySaved, setApiKeySaved] = useState<boolean>(false);
 
   // Transcription output state
   const [transcriptText, setTranscriptText] = useState<string>(
@@ -126,6 +136,13 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
     }
   };
 
+  const handleSaveApiKey = (keyVal: string) => {
+    setApiKey(keyVal);
+    setStoredApiKey(keyVal);
+    setApiKeySaved(true);
+    setTimeout(() => setApiKeySaved(false), 2000);
+  };
+
   const handleStartTranscription = async () => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -134,6 +151,7 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
       mode,
       targetLanguage: mode === 'translate' ? targetLanguage : undefined,
       customPrompt: customPrompt.trim() || undefined,
+      apiKey: apiKey.trim() || undefined,
     };
 
     try {
@@ -146,10 +164,18 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
           onSaveToTrack(track.id, result.transcription);
         }
       } else {
-        setErrorMessage(result.error || 'Failed to transcribe audio. Please try again.');
+        const err = result.error || 'Failed to transcribe audio. Please try again.';
+        setErrorMessage(err);
+        if (err.toLowerCase().includes('api key') || err.toLowerCase().includes('gemini_api_key')) {
+          setShowKeySettings(true);
+        }
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'An unexpected error occurred during transcription.');
+      const msg = err?.message || 'An unexpected error occurred during transcription.';
+      setErrorMessage(msg);
+      if (msg.toLowerCase().includes('api key') || msg.toLowerCase().includes('gemini_api_key')) {
+        setShowKeySettings(true);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -198,16 +224,69 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowKeySettings(!showKeySettings)}
+              className={`p-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+                showKeySettings || apiKey
+                  ? 'bg-slate-800 border-slate-700 text-sky-400'
+                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+              title="API Key Settings"
+            >
+              <Key size={14} />
+              <span className="hidden sm:inline">API Key</span>
+              {showKeySettings ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Optional API Key Configuration Banner/Collapsible */}
+          {showKeySettings && (
+            <div className="bg-slate-950 border border-sky-500/30 rounded-xl p-4 space-y-2.5 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-semibold text-sky-400">
+                  <Key size={14} />
+                  <span>Gemini API Key Configuration</span>
+                </div>
+                {apiKeySaved && (
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                    <Check size={12} /> Saved locally
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                If hosting independently (e.g. on Render, Vercel, or custom servers), provide your Gemini API key below. It is stored securely in your browser and used for speech transcription.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => handleSaveApiKey(e.target.value)}
+                  placeholder="Paste your Gemini API key (AIzaSy...)"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono"
+                />
+                {apiKey && (
+                  <button
+                    onClick={() => handleSaveApiKey('')}
+                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg text-xs text-slate-400 hover:text-rose-400 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Mini Audio Player Bar */}
           <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex flex-col sm:flex-row items-center gap-3">
             <button
@@ -384,12 +463,23 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
             </button>
           </div>
 
-          {/* Error Message with Retry */}
+          {/* Error Message with Retry & API Key prompt */}
           {errorMessage && (
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-rose-500/10 border border-rose-500/25 rounded-xl text-xs text-rose-200">
               <div className="flex items-start gap-2.5">
                 <AlertCircle size={16} className="shrink-0 text-rose-400 mt-0.5" />
-                <span className="leading-relaxed">{errorMessage}</span>
+                <div className="space-y-1">
+                  <span className="leading-relaxed block">{errorMessage}</span>
+                  {!apiKey && (
+                    <button
+                      type="button"
+                      onClick={() => setShowKeySettings(true)}
+                      className="text-[11px] text-sky-400 hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <Key size={11} /> Enter your Gemini API key
+                    </button>
+                  )}
+                </div>
               </div>
               <button
                 type="button"
@@ -466,7 +556,6 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
               {/* Formatted Text Box */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 max-h-72 overflow-y-auto font-mono text-xs text-slate-200 whitespace-pre-wrap leading-relaxed select-text">
                 {searchInTranscript ? (
-                  // Simple text highlighter for quick searching
                   transcriptText.split(new RegExp(`(${searchInTranscript})`, 'gi')).map((part, i) =>
                     part.toLowerCase() === searchInTranscript.toLowerCase() ? (
                       <mark key={i} className="bg-sky-500/40 text-white rounded px-0.5">

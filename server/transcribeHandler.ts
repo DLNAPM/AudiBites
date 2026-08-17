@@ -1,9 +1,15 @@
 import { GoogleGenAI } from '@google/genai';
 
-const getAiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+const getAiClient = (userKey?: string) => {
+  const apiKey =
+    userKey ||
+    process.env.GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured in the server environment.');
+    throw new Error(
+      'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in environment variables or enter an API key.'
+    );
   }
   return new GoogleGenAI({
     apiKey,
@@ -21,6 +27,7 @@ export interface TranscribeRequestPayload {
   mode?: 'standard' | 'timestamped' | 'summary' | 'translate';
   targetLanguage?: string;
   customPrompt?: string;
+  apiKey?: string;
 }
 
 export interface TranscribeResponsePayload {
@@ -39,7 +46,7 @@ export interface TranscribeResponsePayload {
 /**
  * Sniffs the MIME type from the first few bytes of base64 data.
  */
-function detectMimeType(audioBase64: string, fallbackMime: string = 'audio/wav'): string {
+export function detectMimeType(audioBase64: string, fallbackMime: string = 'audio/wav'): string {
   try {
     const headChunk = audioBase64.slice(0, 64);
     const buf = Buffer.from(headChunk, 'base64');
@@ -114,14 +121,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Candidate models in order of priority:
 // gemini-3.1-flash-lite has high availability, fast response time, and high audio transcription accuracy
-const CANDIDATE_MODELS = [
+export const CANDIDATE_MODELS = [
   'gemini-3.1-flash-lite',
   'gemini-3.7-flash',
   'gemini-flash-latest',
 ];
 
 export async function handleTranscription(payload: TranscribeRequestPayload): Promise<TranscribeResponsePayload> {
-  let { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt } = payload;
+  let { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt, apiKey } = payload;
 
   if (!audioBase64 || typeof audioBase64 !== 'string' || audioBase64.trim().length === 0) {
     throw new Error('No audio data provided for transcription.');
@@ -134,7 +141,7 @@ export async function handleTranscription(payload: TranscribeRequestPayload): Pr
   audioBase64 = audioBase64.replace(/\s+/g, '');
 
   const cleanMimeType = detectMimeType(audioBase64, mimeType);
-  const ai = getAiClient();
+  const ai = getAiClient(apiKey);
 
   let promptInstruction = `Listen to the attached audio file and transcribe all spoken words directly into text.
 If there are multiple speakers, label them as Speaker 1, Speaker 2, etc.

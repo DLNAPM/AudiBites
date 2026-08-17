@@ -1,9 +1,11 @@
+import { GoogleGenAI } from '@google/genai';
 import { TranscriptSegment } from '../types';
 
 export interface TranscribeOptions {
   mode?: 'standard' | 'timestamped' | 'summary' | 'translate';
   targetLanguage?: string;
   customPrompt?: string;
+  apiKey?: string;
 }
 
 export interface TranscribeResult {
@@ -13,6 +15,35 @@ export interface TranscribeResult {
   segments?: TranscriptSegment[];
   detectedLanguage?: string;
   error?: string;
+}
+
+const LOCAL_STORAGE_KEY = 'audibites_gemini_api_key';
+
+export function getStoredApiKey(): string {
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (stored && stored.trim()) return stored.trim();
+  } catch {
+    // Ignore localStorage errors
+  }
+  // Check env if available
+  const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (envKey && typeof envKey === 'string' && envKey.trim()) {
+    return envKey.trim();
+  }
+  return '';
+}
+
+export function setStoredApiKey(key: string): void {
+  try {
+    if (key && key.trim()) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, key.trim());
+    } else {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
 /**
@@ -43,7 +74,7 @@ function encodeSpeechWav(audioBuffer: AudioBuffer): Blob {
   // Offline resample to 16kHz mono
   const numberOfChannels = audioBuffer.numberOfChannels;
   const length = Math.ceil(audioBuffer.duration * targetSampleRate);
-  
+
   // Mix channels to mono
   const monoChannel = new Float32Array(audioBuffer.length);
   for (let c = 0; c < numberOfChannels; c++) {
@@ -96,10 +127,55 @@ function encodeSpeechWav(audioBuffer: AudioBuffer): Blob {
 }
 
 /**
+ * Sniffs the MIME type from the first few bytes of base64 data.
+ */
+function detectMimeType(audioBase64: string, fallbackMime: string = 'audio/wav'): string {
+  try {
+    const headChunk = audioBase64.slice(0, 64);
+    const binary = atob(headChunk.slice(0, 32));
+    const buf = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      buf[i] = binary.charCodeAt(i);
+    }
+    if (buf.length >= 4) {
+      if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+        return 'audio/wav';
+      }
+      if (
+        (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) ||
+        (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)
+      ) {
+        return 'audio/mp3';
+      }
+      if (buf[0] === 0x4f && buf[1] === 0x67 && buf[2] === 0x67 && buf[3] === 0x53) {
+        return 'audio/ogg';
+      }
+      if (buf[0] === 0x66 && buf[1] === 0x4c && buf[2] === 0x61 && buf[3] === 0x43) {
+        return 'audio/flac';
+      }
+      if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+        return 'audio/webm';
+      }
+    }
+  } catch {
+    // Ignore sniffing errors
+  }
+
+  let clean = (fallbackMime || 'audio/wav').toLowerCase();
+  if (clean.includes(';')) {
+    clean = clean.split(';')[0].trim();
+  }
+  if (clean === 'audio/mpeg') return 'audio/mp3';
+  if (clean === 'audio/x-wav' || clean === 'audio/wave') return 'audio/wav';
+  if (clean === 'audio/x-m4a' || clean === 'audio/aac') return 'audio/aac';
+  if (clean.startsWith('audio/') || clean.startsWith('video/')) return clean;
+  return 'audio/wav';
+}
+
+/**
  * Optimizes audio for transcription (downsamples large raw audio to 16kHz mono WAV for instant transfer)
  */
 async function optimizeAudioForTranscription(blob: Blob): Promise<{ blob: Blob; mimeType: string }> {
-  // If compressed audio format (MP3, M4A, AAC, OGG, WebM, FLAC) and size is under 8MB, use directly
   const type = (blob.type || '').toLowerCase();
   const isCompressed =
     type.includes('mp3') ||
@@ -114,12 +190,10 @@ async function optimizeAudioForTranscription(blob: Blob): Promise<{ blob: Blob; 
     return { blob, mimeType: type || 'audio/mp3' };
   }
 
-  // If small WAV (< 2MB), send directly
   if (type.includes('wav') && blob.size < 2 * 1024 * 1024) {
     return { blob, mimeType: 'audio/wav' };
   }
 
-  // Otherwise downsample via Web Audio API to 16kHz mono WAV
   try {
     const arrayBuf = await blob.arrayBuffer();
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -140,7 +214,111 @@ async function optimizeAudioForTranscription(blob: Blob): Promise<{ blob: Blob; 
 }
 
 /**
- * Sends audio to server /api/transcribe
+ * Direct client-side Gemini transcription fallback
+ */
+async function transcribeClientDirect(
+  audioBase64: string,
+  mimeType: string,
+  apiKey: string,
+  options: TranscribeOptions
+): Promise<TranscribeResult> {
+  const ai = new GoogleGenAI({ apiKey });
+  const cleanMime = detectMimeType(audioBase64, mimeType);
+
+  let promptInstruction = `Listen to the attached audio file and transcribe all spoken words directly into text.
+If there are multiple speakers, label them as Speaker 1, Speaker 2, etc.
+Maintain proper punctuation and formatting.
+If no spoken words are detected, output [No speech detected] or describe the audio sound in brackets.`;
+
+  if (options.mode === 'timestamped') {
+    promptInstruction = `Listen to the attached audio file and transcribe all spoken words into text with timestamps in brackets at the beginning of each major phrase or sentence, for example:
+[00:00] Speaker 1: Hello and welcome to the show.
+[00:04] Speaker 2: Great to be here.
+If no speech is detected, output [No speech detected].`;
+  } else if (options.mode === 'summary') {
+    promptInstruction = `Listen to the attached audio file. Transcribe the audio and generate an Executive Summary, Key Highlights, and full transcript formatted as:
+# Executive Summary
+[Brief 2-3 sentence overview]
+
+### Key Highlights
+- Key highlight 1
+- Key highlight 2
+
+### Full Transcript
+[Complete verbatim transcript]
+If no speech is detected, provide a summary of the audio contents and indicate [No speech detected].`;
+  } else if (options.mode === 'translate') {
+    const lang = options.targetLanguage || 'English';
+    promptInstruction = `Listen to the attached audio file. Transcribe all spoken words and translate them into ${lang}:
+# Translation (${lang})
+[Translated transcript here]
+
+### Original Audio Transcript
+[Original spoken audio transcript here]
+If no speech is detected, output [No speech detected].`;
+  }
+
+  if (options.customPrompt && options.customPrompt.trim()) {
+    promptInstruction += `\n\nAdditional user guidelines:\n${options.customPrompt.trim()}`;
+  }
+
+  const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.7-flash', 'gemini-flash-latest'];
+  let lastError: any = null;
+
+  for (const modelName of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  data: audioBase64,
+                  mimeType: cleanMime,
+                },
+              },
+              {
+                text: promptInstruction,
+              },
+            ],
+          },
+        ],
+      });
+
+      const rawText = (response.text || '').trim() || '[Audio processed - No audible speech detected]';
+
+      const segments: TranscriptSegment[] = [];
+      const lines = rawText.split('\n');
+      const timestampRegex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?:([^:]+):\s*)?(.*)/;
+
+      for (const line of lines) {
+        const match = line.match(timestampRegex);
+        if (match) {
+          segments.push({
+            time: match[1],
+            speaker: match[2]?.trim(),
+            text: match[3]?.trim() || line,
+          });
+        }
+      }
+
+      return {
+        success: true,
+        transcription: rawText,
+        segments: segments.length > 0 ? segments : undefined,
+      };
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Direct client transcription model ${modelName} error:`, err?.message);
+    }
+  }
+
+  throw lastError || new Error('Direct transcription failed.');
+}
+
+/**
+ * Sends audio to server /api/transcribe with intelligent client-side fallback
  */
 export async function transcribeAudio(
   blob: Blob,
@@ -149,48 +327,66 @@ export async function transcribeAudio(
   try {
     const { blob: optimizedBlob, mimeType } = await optimizeAudioForTranscription(blob);
     const audioBase64 = await blobToBase64(optimizedBlob);
+    const userApiKey = options.apiKey || getStoredApiKey();
 
-    const response = await fetch('/api/transcribe', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        audioBase64,
-        mimeType,
-        mode: options.mode || 'standard',
-        targetLanguage: options.targetLanguage,
-        customPrompt: options.customPrompt,
-      }),
-    });
+    let serverError: string | null = null;
 
-    const responseText = await response.text();
-    let data: any = null;
-    if (responseText && responseText.trim()) {
+    // First attempt: Call the full-stack server endpoint
+    try {
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType,
+          mode: options.mode || 'standard',
+          targetLanguage: options.targetLanguage,
+          customPrompt: options.customPrompt,
+          apiKey: userApiKey || undefined,
+        }),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      const responseText = await response.text();
+
+      if (contentType.includes('text/html') || responseText.startsWith('<!DOCTYPE') || responseText.startsWith('<html')) {
+        // Returned HTML (e.g. SPA index.html fallback from a static hosting setup)
+        serverError = 'Server API endpoint returned HTML. Attempting direct connection...';
+      } else if (responseText && responseText.trim()) {
+        try {
+          const data = JSON.parse(responseText);
+          if (response.ok && data && data.success !== false) {
+            return data;
+          }
+          serverError = data?.error || `Server responded with status ${response.status}`;
+        } catch {
+          serverError = `Server returned invalid JSON (${response.status}): ${responseText.slice(0, 100)}`;
+        }
+      } else {
+        serverError = `Server responded with empty body (${response.status}).`;
+      }
+    } catch (fetchErr: any) {
+      serverError = `Network connection error: ${fetchErr?.message || 'Failed to reach server'}`;
+    }
+
+    // If server succeeded, we already returned. If it failed or missing key and user has key:
+    if (userApiKey) {
+      console.log('Server endpoint unavailable or reported error, falling back to direct client API with user key...');
       try {
-        data = JSON.parse(responseText);
-      } catch {
-        throw new Error(
-          `Server returned an invalid response (${response.status}): ${responseText.slice(0, 120)}`
-        );
+        const directResult = await transcribeClientDirect(audioBase64, mimeType, userApiKey, options);
+        return directResult;
+      } catch (directErr: any) {
+        throw new Error(directErr?.message || serverError || 'Direct transcription failed.');
       }
     }
 
-    if (!response.ok) {
-      const errMsg = data?.error || `Server responded with error status ${response.status}`;
-      throw new Error(errMsg);
-    }
-
-    if (!data || typeof data !== 'object') {
-      throw new Error('Server returned an empty transcription response. Please try again.');
-    }
-
-    if (data.success === false) {
-      throw new Error(data.error || 'Failed to transcribe audio.');
-    }
-
-    return data;
+    // If no user API key configured and server failed
+    throw new Error(
+      serverError || 'Failed to transcribe audio. Please ensure your Gemini API key is configured.'
+    );
   } catch (error: any) {
     console.error('Transcription error in client:', error);
     return {
@@ -231,7 +427,6 @@ export function downloadTranscriptSrt(filename: string, text: string, segments?:
       srtContent += `${idx + 1}\n${startTime} --> ${endTime}\n${seg.speaker ? `${seg.speaker}: ` : ''}${seg.text}\n\n`;
     });
   } else {
-    // Generate SRT from paragraphs
     const paragraphs = text.split('\n\n').filter((p) => p.trim().length > 0);
     paragraphs.forEach((p, idx) => {
       const startSec = idx * 5;
