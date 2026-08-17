@@ -3,7 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 const getAiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not set in the server environment.');
+    throw new Error('GEMINI_API_KEY is not configured in the server environment.');
   }
   return new GoogleGenAI({
     apiKey,
@@ -37,16 +37,22 @@ export interface TranscribeResponsePayload {
 }
 
 export async function handleTranscription(payload: TranscribeRequestPayload): Promise<TranscribeResponsePayload> {
-  const { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt } = payload;
+  let { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt } = payload;
 
-  if (!audioBase64 || audioBase64.trim().length === 0) {
+  if (!audioBase64 || typeof audioBase64 !== 'string' || audioBase64.trim().length === 0) {
     throw new Error('No audio data provided for transcription.');
   }
+
+  // Strip any data: URL scheme prefix
+  if (audioBase64.includes(',')) {
+    audioBase64 = audioBase64.split(',')[1];
+  }
+  audioBase64 = audioBase64.replace(/\s+/g, '');
 
   const ai = getAiClient();
 
   // Normalize mime type
-  let cleanMimeType = mimeType;
+  let cleanMimeType = (mimeType || 'audio/wav').toLowerCase();
   if (cleanMimeType.includes(';')) {
     cleanMimeType = cleanMimeType.split(';')[0].trim();
   }
@@ -103,34 +109,39 @@ Provide both the original language transcription and the translated transcript:
     text: promptText,
   };
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.7-flash',
-    contents: {
-      parts: [audioPart, textPart],
-    },
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: {
+        parts: [audioPart, textPart],
+      },
+    });
 
-  const rawText = response.text || '';
+    const rawText = response.text || '';
 
-  // Extract timestamps/segments if present
-  const segments: Array<{ time?: string; speaker?: string; text: string }> = [];
-  const lines = rawText.split('\n');
-  const timestampRegex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?:([^:]+):\s*)?(.*)/;
+    // Extract timestamps/segments if present
+    const segments: Array<{ time?: string; speaker?: string; text: string }> = [];
+    const lines = rawText.split('\n');
+    const timestampRegex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?:([^:]+):\s*)?(.*)/;
 
-  for (const line of lines) {
-    const match = line.match(timestampRegex);
-    if (match) {
-      segments.push({
-        time: match[1],
-        speaker: match[2]?.trim(),
-        text: match[3]?.trim() || line,
-      });
+    for (const line of lines) {
+      const match = line.match(timestampRegex);
+      if (match) {
+        segments.push({
+          time: match[1],
+          speaker: match[2]?.trim(),
+          text: match[3]?.trim() || line,
+        });
+      }
     }
-  }
 
-  return {
-    success: true,
-    transcription: rawText,
-    segments: segments.length > 0 ? segments : undefined,
-  };
+    return {
+      success: true,
+      transcription: rawText,
+      segments: segments.length > 0 ? segments : undefined,
+    };
+  } catch (apiError: any) {
+    console.error('Gemini API generateContent error:', apiError);
+    throw new Error(apiError?.message || 'Gemini API failed to process the audio.');
+  }
 }
