@@ -21,13 +21,23 @@ const LOCAL_STORAGE_KEY = 'audibites_gemini_api_key';
 
 export function getStoredApiKey(): string {
   try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const stored =
+      localStorage.getItem(LOCAL_STORAGE_KEY) ||
+      localStorage.getItem('gemini_api_key') ||
+      localStorage.getItem('GEMINI_API_KEY') ||
+      localStorage.getItem('API_KEY');
     if (stored && stored.trim()) return stored.trim();
   } catch {
     // Ignore localStorage errors
   }
-  // Check env if available
-  const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  // Check build-time and runtime env variables
+  const envKey =
+    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+    (import.meta as any).env?.VITE_API_KEY ||
+    (import.meta as any).env?.GEMINI_API_KEY ||
+    (import.meta as any).env?.API_KEY ||
+    (typeof process !== 'undefined' ? (process as any).env?.GEMINI_API_KEY || (process as any).env?.API_KEY : '');
+
   if (envKey && typeof envKey === 'string' && envKey.trim()) {
     return envKey.trim();
   }

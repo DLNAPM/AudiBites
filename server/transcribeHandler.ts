@@ -5,10 +5,11 @@ const getAiClient = (userKey?: string) => {
     userKey ||
     process.env.GEMINI_API_KEY ||
     process.env.API_KEY ||
-    process.env.VITE_GEMINI_API_KEY;
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.VITE_API_KEY;
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in environment variables or enter an API key.'
+      'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY or API_KEY in environment variables or enter an API key.'
     );
   }
   return new GoogleGenAI({

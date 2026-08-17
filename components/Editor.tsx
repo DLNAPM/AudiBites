@@ -20,13 +20,14 @@ import {
   Sparkles,
   ArrowDownUp,
   Sliders,
-  Maximize2,
-  Minimize2,
   FileDown,
   Plus,
   HelpCircle,
   Clock,
   FileText,
+  BookOpen,
+  PanelRightClose,
+  PanelRightOpen,
 } from 'lucide-react';
 import {
   bufferToWav,
@@ -40,6 +41,7 @@ import {
   cloneAudioBuffer,
   formatTimePrecise,
 } from '../utils/audioUtils';
+import { StudioLegend, StudioButtonKey } from './StudioLegend';
 
 interface EditorProps {
   initialBlob: Blob | null;
@@ -97,6 +99,17 @@ const Editor: React.FC<EditorProps> = ({
   // Modals & Panels
   const [showGainModal, setShowGainModal] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showLegendPanel, setShowLegendPanel] = useState(true);
+
+  // Interactive Button Legend State
+  const [activeLegendKey, setActiveLegendKey] = useState<StudioButtonKey | null>('play-pause');
+  const [lastActionTimestamp, setLastActionTimestamp] = useState<number>(Date.now());
+
+  // Helper to highlight a button in the right-side legend whenever it's clicked or used
+  const triggerLegend = (key: StudioButtonKey) => {
+    setActiveLegendKey(key);
+    setLastActionTimestamp(Date.now());
+  };
 
   // Initialize WaveSurfer & AudioContext
   useEffect(() => {
@@ -182,15 +195,18 @@ const Editor: React.FC<EditorProps> = ({
         if (r.id !== region.id) r.remove();
       });
       setActiveRegion(region);
+      triggerLegend('region-select');
     });
 
     regs.on('region-updated', (region) => {
       setActiveRegion(region);
+      triggerLegend('region-select');
     });
 
     regs.on('region-clicked', (region, e) => {
       e.stopPropagation();
       region.play();
+      triggerLegend('play-pause');
     });
 
     regs.on('region-out', (region) => {
@@ -266,6 +282,7 @@ const Editor: React.FC<EditorProps> = ({
 
   // Undo
   const handleUndo = useCallback(() => {
+    triggerLegend('undo');
     if (historyIndex > 0 && audioContext) {
       const prevIndex = historyIndex - 1;
       const targetBuffer = history[prevIndex].buffer;
@@ -286,6 +303,7 @@ const Editor: React.FC<EditorProps> = ({
 
   // Redo
   const handleRedo = useCallback(() => {
+    triggerLegend('redo');
     if (historyIndex < history.length - 1 && audioContext) {
       const nextIndex = historyIndex + 1;
       const targetBuffer = history[nextIndex].buffer;
@@ -312,6 +330,7 @@ const Editor: React.FC<EditorProps> = ({
 
       if (e.code === 'Space') {
         e.preventDefault();
+        triggerLegend('play-pause');
         wavesurfer.current?.playPause();
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -323,11 +342,14 @@ const Editor: React.FC<EditorProps> = ({
         e.preventDefault();
         handleRedo();
       } else if (e.code === 'Escape') {
+        triggerLegend('region-select');
         regionsPlugin.current?.clearRegions();
         setActiveRegion(null);
       } else if (e.key === 't' && activeRegion) {
+        triggerLegend('trim');
         handleTrim();
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && activeRegion) {
+        triggerLegend('cut');
         handleCut();
       }
     };
@@ -338,24 +360,28 @@ const Editor: React.FC<EditorProps> = ({
 
   // Tool Operations
   const handleTrim = () => {
+    triggerLegend('trim');
     if (!activeRegion || !currentBuffer || !audioContext) return;
     const newBuf = sliceAudioBuffer(currentBuffer, activeRegion.start, activeRegion.end, audioContext);
     commitBufferChange(newBuf, 'Trim Audio');
   };
 
   const handleCut = () => {
+    triggerLegend('cut');
     if (!activeRegion || !currentBuffer || !audioContext) return;
     const newBuf = cutAudioBuffer(currentBuffer, activeRegion.start, activeRegion.end, audioContext);
     commitBufferChange(newBuf, 'Cut Audio');
   };
 
   const handleSilence = () => {
+    triggerLegend('silence');
     if (!activeRegion || !currentBuffer || !audioContext) return;
     const newBuf = silenceAudioBuffer(currentBuffer, activeRegion.start, activeRegion.end, audioContext);
     commitBufferChange(newBuf, 'Silence Region');
   };
 
   const handleFadeIn = () => {
+    triggerLegend('fade-in');
     if (!currentBuffer || !audioContext) return;
     const regStart = activeRegion ? activeRegion.start : 0;
     const regEnd = activeRegion ? activeRegion.end : currentBuffer.duration;
@@ -364,6 +390,7 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleFadeOut = () => {
+    triggerLegend('fade-out');
     if (!currentBuffer || !audioContext) return;
     const regStart = activeRegion ? activeRegion.start : 0;
     const regEnd = activeRegion ? activeRegion.end : currentBuffer.duration;
@@ -372,6 +399,7 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleNormalize = () => {
+    triggerLegend('normalize');
     if (!currentBuffer || !audioContext) return;
     const regStart = activeRegion ? activeRegion.start : undefined;
     const regEnd = activeRegion ? activeRegion.end : undefined;
@@ -380,6 +408,7 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleGainApply = (multiplier: number, label: string) => {
+    triggerLegend('gain');
     if (!currentBuffer || !audioContext) return;
     const regStart = activeRegion ? activeRegion.start : undefined;
     const regEnd = activeRegion ? activeRegion.end : undefined;
@@ -389,6 +418,7 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleReverse = () => {
+    triggerLegend('reverse');
     if (!currentBuffer || !audioContext) return;
     const regStart = activeRegion ? activeRegion.start : undefined;
     const regEnd = activeRegion ? activeRegion.end : undefined;
@@ -398,6 +428,7 @@ const Editor: React.FC<EditorProps> = ({
 
   // Direct File Download (WAV)
   const handleDirectDownload = () => {
+    triggerLegend('export-wav');
     if (!currentBuffer) return;
     const blob = bufferToWav(currentBuffer);
     const url = URL.createObjectURL(blob);
@@ -411,12 +442,14 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleSave = () => {
+    triggerLegend('save-library');
     if (!currentBuffer) return;
     const blob = bufferToWav(currentBuffer);
     onSave(blob, fileName.trim() || 'Edited Audio');
   };
 
   const handleSaveAsCopy = () => {
+    triggerLegend('save-copy');
     if (!currentBuffer) return;
     const blob = bufferToWav(currentBuffer);
     const copyName = `${fileName.trim() || 'Edited Audio'} (Copy)`;
@@ -428,6 +461,7 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleManualRegionChange = (key: 'start' | 'end', value: number) => {
+    triggerLegend('region-select');
     if (!activeRegion) return;
     if (key === 'start') {
       const newStart = Math.max(0, Math.min(value, activeRegion.end - 0.05));
@@ -441,8 +475,8 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 text-slate-100 p-4 md:p-6 max-w-6xl mx-auto w-full">
-      {/* Top Header & Breadcrumb */}
+    <div className="flex flex-col min-h-full bg-slate-900 text-slate-100 p-4 md:p-6 max-w-7xl mx-auto w-full">
+      {/* Studio Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-sky-500/10 border border-sky-500/20 rounded-xl flex items-center justify-center text-sky-400">
@@ -464,8 +498,21 @@ const Editor: React.FC<EditorProps> = ({
           </div>
         </div>
 
-        {/* Undo / Redo & Save Actions */}
-        <div className="flex items-center gap-2">
+        {/* Action Controls & Legend Toggle */}
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <button
+            onClick={() => setShowLegendPanel(!showLegendPanel)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition-colors ${
+              showLegendPanel
+                ? 'bg-sky-500/15 border-sky-500/30 text-sky-400'
+                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+            title="Toggle Right-Side Button Legend & Guide"
+          >
+            {showLegendPanel ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+            <span className="hidden sm:inline">Button Legend</span>
+          </button>
+
           <button
             onClick={handleUndo}
             disabled={historyIndex <= 0}
@@ -483,7 +530,7 @@ const Editor: React.FC<EditorProps> = ({
             <Redo2 size={16} />
           </button>
 
-          <div className="h-5 w-px bg-slate-800 mx-1"></div>
+          <div className="h-5 w-px bg-slate-800 mx-1 hidden sm:block"></div>
 
           <button
             onClick={handleDirectDownload}
@@ -497,6 +544,7 @@ const Editor: React.FC<EditorProps> = ({
           {onTranscribe && (
             <button
               onClick={() => {
+                triggerLegend('transcribe');
                 if (currentBuffer) {
                   const blob = bufferToWav(currentBuffer);
                   onTranscribe(blob, fileName);
@@ -539,278 +587,341 @@ const Editor: React.FC<EditorProps> = ({
         </div>
       </div>
 
-      {/* Main Waveform Display */}
-      <div className="relative bg-slate-950 rounded-2xl border border-slate-800 p-5 shadow-inner mb-4 flex flex-col justify-center min-h-[220px]">
-        {loading && (
-          <div className="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center backdrop-blur-xs">
-            <div className="w-10 h-10 border-3 border-sky-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-            <p className="text-xs text-sky-400 font-medium">Processing Audio Waveform...</p>
-          </div>
-        )}
+      {/* Main Studio Body: Split View (Left: Workspace, Right: Legend) */}
+      <div className="flex-1 flex flex-col lg:flex-row gap-6 items-start">
+        {/* Left Workspace */}
+        <div className="flex-1 w-full flex flex-col space-y-4 min-w-0">
+          {/* Waveform Canvas Container */}
+          <div className="relative bg-slate-950 rounded-2xl border border-slate-800 p-5 shadow-inner flex flex-col justify-center min-h-[220px]">
+            {loading && (
+              <div className="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center backdrop-blur-xs rounded-2xl">
+                <div className="w-10 h-10 border-3 border-sky-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                <p className="text-xs text-sky-400 font-medium">Processing Audio Waveform...</p>
+              </div>
+            )}
 
-        {/* WaveSurfer Container */}
-        <div ref={containerRef} className="w-full" />
-        <div ref={timelineRef} className="w-full mt-2" />
+            {/* WaveSurfer Container */}
+            <div ref={containerRef} className="w-full" />
+            <div ref={timelineRef} className="w-full mt-2" />
 
-        {/* Zoom & View Controls Overlay */}
-        <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/80 text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <ZoomOut size={14} />
-            <input
-              type="range"
-              min="20"
-              max="250"
-              value={zoomLevel}
-              onChange={(e) => setZoomLevel(Number(e.target.value))}
-              className="w-24 md:w-32 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-            />
-            <ZoomIn size={14} />
-            <span className="font-mono text-[10px] text-slate-500">{zoomLevel} px/s</span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsLooping(!isLooping)}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
-                isLooping ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30' : 'hover:bg-slate-900 text-slate-400'
-              }`}
-            >
-              <Repeat size={13} />
-              <span>Loop Region</span>
-            </button>
-
-            <button
-              onClick={() => setShowShortcuts(true)}
-              className="flex items-center gap-1 hover:text-slate-200"
-            >
-              <HelpCircle size={14} />
-              <span className="hidden sm:inline">Shortcuts</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Digital Time & Selection Indicator */}
-      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-4">
-        {activeRegion ? (
-          <div className="flex items-center gap-4 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-pink-400"></span>
-              <span className="text-slate-400 font-semibold uppercase tracking-wider text-[11px]">Region:</span>
-              <div className="flex items-center gap-1 font-mono">
+            {/* Zoom & View Controls Overlay */}
+            <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/80 text-xs text-slate-400 flex-wrap gap-2">
+              <div
+                className="flex items-center gap-2 cursor-pointer"
+                onClick={() => triggerLegend('zoom')}
+              >
+                <ZoomOut size={14} />
                 <input
-                  type="number"
-                  step="0.01"
-                  value={Number(activeRegion.start.toFixed(2))}
-                  onChange={(e) => handleManualRegionChange('start', Number(e.target.value))}
-                  className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-pink-300 focus:outline-none focus:border-pink-500"
+                  type="range"
+                  min="20"
+                  max="250"
+                  value={zoomLevel}
+                  onChange={(e) => {
+                    setZoomLevel(Number(e.target.value));
+                    triggerLegend('zoom');
+                  }}
+                  className="w-24 md:w-32 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
                 />
-                <span className="text-slate-600">to</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={Number(activeRegion.end.toFixed(2))}
-                  onChange={(e) => handleManualRegionChange('end', Number(e.target.value))}
-                  className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-pink-300 focus:outline-none focus:border-pink-500"
-                />
-                <span className="text-slate-500 ml-1">
-                  (Duration: {formatTimePrecise(activeRegion.end - activeRegion.start)})
+                <ZoomIn size={14} />
+                <span className="font-mono text-[10px] text-slate-500">{zoomLevel} px/s</span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setIsLooping(!isLooping);
+                    triggerLegend('loop');
+                  }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
+                    isLooping
+                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                      : 'hover:bg-slate-900 text-slate-400'
+                  }`}
+                  title="Loop playback in selected region"
+                >
+                  <Repeat size={13} />
+                  <span>Loop Region</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowShortcuts(true);
+                    triggerLegend('shortcuts');
+                  }}
+                  className="flex items-center gap-1 hover:text-slate-200"
+                  title="View Keyboard Hotkeys"
+                >
+                  <HelpCircle size={14} />
+                  <span className="hidden sm:inline">Shortcuts</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Digital Time & Selection Indicator Bar */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-4">
+            {activeRegion ? (
+              <div className="flex items-center gap-4 text-xs">
+                <div
+                  className="flex items-center gap-2 cursor-pointer"
+                  onClick={() => triggerLegend('region-select')}
+                >
+                  <span className="w-2 h-2 rounded-full bg-pink-400"></span>
+                  <span className="text-slate-400 font-semibold uppercase tracking-wider text-[11px]">Region:</span>
+                  <div className="flex items-center gap-1 font-mono">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={Number(activeRegion.start.toFixed(2))}
+                      onChange={(e) => handleManualRegionChange('start', Number(e.target.value))}
+                      className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-pink-300 focus:outline-none focus:border-pink-500"
+                    />
+                    <span className="text-slate-600">to</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={Number(activeRegion.end.toFixed(2))}
+                      onChange={(e) => handleManualRegionChange('end', Number(e.target.value))}
+                      className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-pink-300 focus:outline-none focus:border-pink-500"
+                    />
+                    <span className="text-slate-500 ml-1">
+                      (Duration: {formatTimePrecise(activeRegion.end - activeRegion.start)})
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    triggerLegend('region-select');
+                    regionsPlugin.current?.clearRegions();
+                    setActiveRegion(null);
+                  }}
+                  className="text-[11px] text-slate-500 hover:text-slate-300 underline"
+                >
+                  Clear Selection
+                </button>
+              </div>
+            ) : (
+              <div
+                className="flex items-center gap-3 text-xs cursor-pointer"
+                onClick={() => triggerLegend('play-pause')}
+              >
+                <Clock size={15} className="text-sky-400" />
+                <div className="font-mono text-sm">
+                  <span className="text-white font-bold">{formatTimePrecise(currentTime)}</span>
+                  <span className="text-slate-600 mx-1.5">/</span>
+                  <span className="text-slate-400">{formatTimePrecise(totalDuration)}</span>
+                </div>
+                <span className="text-[11px] text-slate-500 hidden sm:inline">
+                  (Drag on waveform to select a region)
                 </span>
+              </div>
+            )}
+
+            {/* Playback Rate & Volume */}
+            <div className="flex items-center gap-3 text-xs">
+              <div className="flex items-center gap-1 text-slate-400">
+                <span onClick={() => triggerLegend('speed')} className="cursor-pointer">
+                  Speed:
+                </span>
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                  <button
+                    key={rate}
+                    onClick={() => {
+                      setPlaybackRate(rate);
+                      triggerLegend('speed');
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                      playbackRate === rate ? 'bg-sky-500 text-white font-bold' : 'hover:bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {rate}x
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-4 w-px bg-slate-800"></div>
+
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <button
+                  onClick={() => {
+                    setIsMuted(!isMuted);
+                    triggerLegend('volume');
+                  }}
+                  className="hover:text-white"
+                  title="Mute/Unmute preview"
+                >
+                  {isMuted || volume === 0 ? <VolumeX size={15} /> : <Volume2 size={15} />}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => {
+                    setVolume(Number(e.target.value));
+                    if (isMuted) setIsMuted(false);
+                    triggerLegend('volume');
+                  }}
+                  className="w-16 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Editing Toolbar Grid (4 Blocks) */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            {/* 1. Playback Transport */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-center gap-3">
+              <button
+                onClick={() => {
+                  triggerLegend('stop');
+                  wavesurfer.current?.stop();
+                }}
+                className="p-2.5 text-slate-400 hover:text-white hover:bg-slate-900 rounded-lg transition-colors"
+                title="Stop & Return to Start"
+              >
+                <RotateCcw size={16} />
+              </button>
+              <button
+                onClick={() => {
+                  triggerLegend('play-pause');
+                  wavesurfer.current?.playPause();
+                }}
+                className="w-11 h-11 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex items-center justify-center shadow-md shadow-sky-500/20 transition-all active:scale-95"
+                title="Play/Pause (Space)"
+              >
+                {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+              </button>
+            </div>
+
+            {/* 2. Selection Cuts & Trims */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
+              <button
+                onClick={handleTrim}
+                disabled={!activeRegion}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-sky-400 hover:text-sky-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
+                title="Trim: Keep selected region and remove everything else (T)"
+              >
+                <Scissors size={16} className="rotate-90" />
+                <span className="font-semibold text-[11px]">Trim</span>
+              </button>
+
+              <div className="w-px h-6 bg-slate-800"></div>
+
+              <button
+                onClick={handleCut}
+                disabled={!activeRegion}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-rose-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
+                title="Cut: Delete selected region (Del/Backspace)"
+              >
+                <Scissors size={16} />
+                <span className="font-semibold text-[11px]">Cut</span>
+              </button>
+
+              <div className="w-px h-6 bg-slate-800"></div>
+
+              <button
+                onClick={handleSilence}
+                disabled={!activeRegion}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
+                title="Mute/Silence selected region"
+              >
+                <VolumeX size={16} />
+                <span className="font-semibold text-[11px]">Silence</span>
+              </button>
+            </div>
+
+            {/* 3. Fades & Dynamics */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
+              <div className="flex flex-col items-center">
+                <button
+                  onClick={handleFadeIn}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-slate-900 rounded-md transition-colors"
+                  title={`Fade in smoothly over ${fadeDuration}s`}
+                >
+                  Fade In
+                </button>
+                <button
+                  onClick={handleFadeOut}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-amber-400 hover:bg-slate-900 rounded-md transition-colors"
+                  title={`Fade out smoothly over ${fadeDuration}s`}
+                >
+                  Fade Out
+                </button>
+              </div>
+
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-[10px] text-slate-500">Duration:</span>
+                <select
+                  value={fadeDuration}
+                  onChange={(e) => {
+                    setFadeDuration(Number(e.target.value));
+                    triggerLegend('fade-in');
+                  }}
+                  className="bg-slate-900 border border-slate-800 text-[10px] text-slate-300 rounded px-1.5 py-0.5 focus:outline-none"
+                >
+                  <option value={0.25}>0.25s</option>
+                  <option value={0.5}>0.5s</option>
+                  <option value={1.0}>1.0s</option>
+                  <option value={2.0}>2.0s</option>
+                </select>
               </div>
             </div>
 
-            <button
-              onClick={() => {
-                regionsPlugin.current?.clearRegions();
-                setActiveRegion(null);
-              }}
-              className="text-[11px] text-slate-500 hover:text-slate-300 underline"
-            >
-              Clear Selection
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 text-xs">
-            <Clock size={15} className="text-sky-400" />
-            <div className="font-mono text-sm">
-              <span className="text-white font-bold">{formatTimePrecise(currentTime)}</span>
-              <span className="text-slate-600 mx-1.5">/</span>
-              <span className="text-slate-400">{formatTimePrecise(totalDuration)}</span>
-            </div>
-            <span className="text-[11px] text-slate-500 hidden sm:inline">
-              (Drag on waveform to select a region)
-            </span>
-          </div>
-        )}
-
-        {/* Playback Rate & Volume */}
-        <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-1 text-slate-400">
-            <span>Speed:</span>
-            {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+            {/* 4. Normalization & Special Audio FX */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
               <button
-                key={rate}
-                onClick={() => setPlaybackRate(rate)}
-                className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-                  playbackRate === rate ? 'bg-sky-500 text-white font-bold' : 'hover:bg-slate-800 text-slate-400'
-                }`}
+                onClick={handleNormalize}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-sky-400 hover:text-sky-300 hover:bg-slate-900 rounded-lg transition-colors"
+                title="Normalize Peak: Maximize volume without distortion"
               >
-                {rate}x
+                <Sparkles size={16} />
+                <span className="font-semibold text-[11px]">Normalize</span>
               </button>
-            ))}
-          </div>
 
-          <div className="h-4 w-px bg-slate-800"></div>
+              <div className="w-px h-6 bg-slate-800"></div>
 
-          <div className="flex items-center gap-1.5 text-slate-400">
-            <button onClick={() => setIsMuted(!isMuted)} className="hover:text-white">
-              {isMuted || volume === 0 ? <VolumeX size={15} /> : <Volume2 size={15} />}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={isMuted ? 0 : volume}
-              onChange={(e) => {
-                setVolume(Number(e.target.value));
-                if (isMuted) setIsMuted(false);
-              }}
-              className="w-16 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-            />
-          </div>
-        </div>
-      </div>
+              <button
+                onClick={() => {
+                  triggerLegend('gain');
+                  setShowGainModal(true);
+                }}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-purple-400 hover:text-purple-300 hover:bg-slate-900 rounded-lg transition-colors"
+                title="Adjust Gain / Volume level"
+              >
+                <Sliders size={16} />
+                <span className="font-semibold text-[11px]">Gain +/-</span>
+              </button>
 
-      {/* Editing Toolbar Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        {/* 1. Playback Transport */}
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-center gap-3">
-          <button
-            onClick={() => wavesurfer.current?.stop()}
-            className="p-2.5 text-slate-400 hover:text-white hover:bg-slate-900 rounded-lg transition-colors"
-            title="Stop & Return to Start"
-          >
-            <RotateCcw size={16} />
-          </button>
-          <button
-            onClick={() => wavesurfer.current?.playPause()}
-            className="w-11 h-11 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex items-center justify-center shadow-md shadow-sky-500/20 transition-all active:scale-95"
-            title="Play/Pause (Space)"
-          >
-            {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
-          </button>
-        </div>
+              <div className="w-px h-6 bg-slate-800"></div>
 
-        {/* 2. Selection Cuts & Trims */}
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
-          <button
-            onClick={handleTrim}
-            disabled={!activeRegion}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-sky-400 hover:text-sky-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
-            title="Trim: Keep selected region and remove everything else (T)"
-          >
-            <Scissors size={16} className="rotate-90" />
-            <span className="font-semibold text-[11px]">Trim</span>
-          </button>
-
-          <div className="w-px h-6 bg-slate-800"></div>
-
-          <button
-            onClick={handleCut}
-            disabled={!activeRegion}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-rose-400 hover:text-rose-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
-            title="Cut: Delete selected region (Del/Backspace)"
-          >
-            <Scissors size={16} />
-            <span className="font-semibold text-[11px]">Cut</span>
-          </button>
-
-          <div className="w-px h-6 bg-slate-800"></div>
-
-          <button
-            onClick={handleSilence}
-            disabled={!activeRegion}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-900 rounded-lg transition-colors"
-            title="Mute/Silence selected region"
-          >
-            <VolumeX size={16} />
-            <span className="font-semibold text-[11px]">Silence</span>
-          </button>
-        </div>
-
-        {/* 3. Fades & Dynamics */}
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
-          <div className="flex flex-col items-center">
-            <button
-              onClick={handleFadeIn}
-              className="px-2.5 py-1 text-[11px] font-semibold text-emerald-400 hover:bg-slate-900 rounded-md transition-colors"
-              title={`Fade in smoothly over ${fadeDuration}s`}
-            >
-              Fade In
-            </button>
-            <button
-              onClick={handleFadeOut}
-              className="px-2.5 py-1 text-[11px] font-semibold text-amber-400 hover:bg-slate-900 rounded-md transition-colors"
-              title={`Fade out smoothly over ${fadeDuration}s`}
-            >
-              Fade Out
-            </button>
-          </div>
-
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-[10px] text-slate-500">Duration:</span>
-            <select
-              value={fadeDuration}
-              onChange={(e) => setFadeDuration(Number(e.target.value))}
-              className="bg-slate-900 border border-slate-800 text-[10px] text-slate-300 rounded px-1.5 py-0.5 focus:outline-none"
-            >
-              <option value={0.25}>0.25s</option>
-              <option value={0.5}>0.5s</option>
-              <option value={1.0}>1.0s</option>
-              <option value={2.0}>2.0s</option>
-            </select>
+              <button
+                onClick={handleReverse}
+                className="flex flex-col items-center gap-1 p-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-900 rounded-lg transition-colors"
+                title="Reverse Audio"
+              >
+                <ArrowDownUp size={16} />
+                <span className="font-semibold text-[11px]">Reverse</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* 4. Normalization & Special Audio FX */}
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-around gap-2">
-          <button
-            onClick={handleNormalize}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-sky-400 hover:text-sky-300 hover:bg-slate-900 rounded-lg transition-colors"
-            title="Normalize Peak: Maximize volume without distortion"
-          >
-            <Sparkles size={16} />
-            <span className="font-semibold text-[11px]">Normalize</span>
-          </button>
-
-          <div className="w-px h-6 bg-slate-800"></div>
-
-          <button
-            onClick={() => setShowGainModal(true)}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-purple-400 hover:text-purple-300 hover:bg-slate-900 rounded-lg transition-colors"
-            title="Adjust Gain / Volume level"
-          >
-            <Sliders size={16} />
-            <span className="font-semibold text-[11px]">Gain +/-</span>
-          </button>
-
-          <div className="w-px h-6 bg-slate-800"></div>
-
-          <button
-            onClick={handleReverse}
-            className="flex flex-col items-center gap-1 p-1.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-900 rounded-lg transition-colors"
-            title="Reverse Audio"
-          >
-            <ArrowDownUp size={16} />
-            <span className="font-semibold text-[11px]">Reverse</span>
-          </button>
-        </div>
+        {/* Right Side: Interactive Studio Button Legend & Guide */}
+        {showLegendPanel && (
+          <StudioLegend
+            activeButtonKey={activeLegendKey}
+            onSelectButton={(key) => triggerLegend(key)}
+            lastActionTimestamp={lastActionTimestamp}
+          />
+        )}
       </div>
 
       {/* Gain Adjustment Modal */}
       {showGainModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
@@ -867,10 +978,13 @@ const Editor: React.FC<EditorProps> = ({
 
       {/* Keyboard Shortcuts Sheet */}
       {showShortcuts && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-bold text-white">Studio Keyboard Shortcuts</h3>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <HelpCircle size={18} className="text-sky-400" />
+                Studio Keyboard Shortcuts
+              </h3>
               <button onClick={() => setShowShortcuts(false)} className="text-slate-400 hover:text-white">
                 <X size={18} />
               </button>

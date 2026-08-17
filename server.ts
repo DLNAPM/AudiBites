@@ -19,7 +19,12 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.API_KEY || process.env.VITE_GEMINI_API_KEY),
+    hasGeminiKey: Boolean(
+      process.env.GEMINI_API_KEY ||
+      process.env.API_KEY ||
+      process.env.VITE_GEMINI_API_KEY ||
+      process.env.VITE_API_KEY
+    ),
     timestamp: new Date().toISOString(),
   });
 });
