@@ -63,23 +63,23 @@ export async function transcribeAudio(
 
     const responseText = await response.text();
     let data: any = null;
-    try {
-      data = responseText ? JSON.parse(responseText) : null;
-    } catch {
-      // Body is not JSON (e.g. HTML or empty string)
-      throw new Error(
-        `Server returned an invalid response (${response.status} ${response.statusText}): ${
-          responseText ? responseText.slice(0, 120) : 'Empty response'
-        }`
-      );
+    if (responseText && responseText.trim()) {
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          `Server returned an invalid response (${response.status}): ${responseText.slice(0, 120)}`
+        );
+      }
     }
 
     if (!response.ok) {
-      throw new Error(data?.error || `Server responded with error status ${response.status}`);
+      const errMsg = data?.error || `Server responded with error status ${response.status}`;
+      throw new Error(errMsg);
     }
 
-    if (!data) {
-      throw new Error('Server returned an empty transcription response.');
+    if (!data || typeof data !== 'object') {
+      throw new Error('Server returned an empty transcription response. Please try again.');
     }
 
     if (data.success === false) {

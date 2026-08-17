@@ -3,6 +3,33 @@ import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { handleTranscription } from './server/transcribeHandler';
 
+function parseRequestBody(req: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    if (req.body && typeof req.body === 'object') {
+      return resolve(req.body);
+    }
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer | string) => {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    });
+    req.on('end', () => {
+      try {
+        const bodyStr = Buffer.concat(chunks).toString('utf-8');
+        if (!bodyStr || !bodyStr.trim()) {
+          resolve({});
+        } else {
+          resolve(JSON.parse(bodyStr));
+        }
+      } catch (err: any) {
+        reject(new Error('Invalid JSON request body: ' + err.message));
+      }
+    });
+    req.on('error', (err: any) => {
+      reject(err);
+    });
+  });
+}
+
 function setupApiMiddleware(middlewares: any, env: Record<string, string>) {
   // Ensure API keys from env are accessible
   if (!process.env.GEMINI_API_KEY && env.GEMINI_API_KEY) {
@@ -14,7 +41,7 @@ function setupApiMiddleware(middlewares: any, env: Record<string, string>) {
 
   middlewares.use(async (req: any, res: any, next: any) => {
     const rawUrl = req.url || '';
-    const pathname = rawUrl.split('?')[0];
+    const pathname = (rawUrl.split('?')[0] || '').replace(/\/+$/, '');
 
     if (pathname === '/api/transcribe') {
       // CORS & Cache Headers
@@ -39,20 +66,10 @@ function setupApiMiddleware(middlewares: any, env: Record<string, string>) {
       }
 
       try {
-        let payload: any = {};
-        if (req.body && typeof req.body === 'object') {
-          payload = req.body;
-        } else {
-          const chunks: Buffer[] = [];
-          for await (const chunk of req) {
-            chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-          }
-          const bodyStr = Buffer.concat(chunks).toString('utf-8');
-          payload = bodyStr ? JSON.parse(bodyStr) : {};
-        }
-
+        const payload = await parseRequestBody(req);
         const result = await handleTranscription(payload);
         const jsonStr = JSON.stringify(result);
+
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.setHeader('Content-Length', Buffer.byteLength(jsonStr, 'utf-8'));
