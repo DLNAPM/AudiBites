@@ -36,6 +36,110 @@ export async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
+ * Encodes an AudioBuffer into a compact 16kHz 16-bit Mono WAV Blob for speech recognition
+ */
+function encodeSpeechWav(audioBuffer: AudioBuffer): Blob {
+  const targetSampleRate = 16000;
+  // Offline resample to 16kHz mono
+  const numberOfChannels = audioBuffer.numberOfChannels;
+  const length = Math.ceil(audioBuffer.duration * targetSampleRate);
+  
+  // Mix channels to mono
+  const monoChannel = new Float32Array(audioBuffer.length);
+  for (let c = 0; c < numberOfChannels; c++) {
+    const channelData = audioBuffer.getChannelData(c);
+    for (let i = 0; i < audioBuffer.length; i++) {
+      monoChannel[i] += channelData[i] / numberOfChannels;
+    }
+  }
+
+  // Resample
+  const resampled = new Float32Array(length);
+  const ratio = audioBuffer.length / length;
+  for (let i = 0; i < length; i++) {
+    const srcIndex = Math.min(audioBuffer.length - 1, Math.floor(i * ratio));
+    resampled[i] = monoChannel[srcIndex];
+  }
+
+  // Build WAV
+  const wavBuffer = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(wavBuffer);
+
+  // RIFF header
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36 + length * 2, true);
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+
+  // fmt chunk
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true); // SubChunk1Size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono (1 channel)
+  view.setUint32(24, targetSampleRate, true); // SampleRate
+  view.setUint32(28, targetSampleRate * 2, true); // ByteRate
+  view.setUint16(32, 2, true); // BlockAlign (1 * 2)
+  view.setUint16(34, 16, true); // BitsPerSample (16-bit)
+
+  // data chunk
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < length; i++) {
+    let s = Math.max(-1, Math.min(1, resampled[i]));
+    s = s < 0 ? s * 0x8000 : s * 0x7fff;
+    view.setInt16(offset, Math.floor(s), true);
+    offset += 2;
+  }
+
+  return new Blob([wavBuffer], { type: 'audio/wav' });
+}
+
+/**
+ * Optimizes audio for transcription (downsamples large raw audio to 16kHz mono WAV for instant transfer)
+ */
+async function optimizeAudioForTranscription(blob: Blob): Promise<{ blob: Blob; mimeType: string }> {
+  // If compressed audio format (MP3, M4A, AAC, OGG, WebM, FLAC) and size is under 8MB, use directly
+  const type = (blob.type || '').toLowerCase();
+  const isCompressed =
+    type.includes('mp3') ||
+    type.includes('mpeg') ||
+    type.includes('aac') ||
+    type.includes('m4a') ||
+    type.includes('ogg') ||
+    type.includes('webm') ||
+    type.includes('flac');
+
+  if (isCompressed && blob.size < 8 * 1024 * 1024) {
+    return { blob, mimeType: type || 'audio/mp3' };
+  }
+
+  // If small WAV (< 2MB), send directly
+  if (type.includes('wav') && blob.size < 2 * 1024 * 1024) {
+    return { blob, mimeType: 'audio/wav' };
+  }
+
+  // Otherwise downsample via Web Audio API to 16kHz mono WAV
+  try {
+    const arrayBuf = await blob.arrayBuffer();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass) {
+      const ctx = new AudioContextClass();
+      const decodedBuffer = await ctx.decodeAudioData(arrayBuf);
+      if (ctx.state !== 'closed') {
+        await ctx.close();
+      }
+      const compactBlob = encodeSpeechWav(decodedBuffer);
+      return { blob: compactBlob, mimeType: 'audio/wav' };
+    }
+  } catch (err) {
+    console.warn('Could not downsample audio with WebAudio, falling back to original blob:', err);
+  }
+
+  return { blob, mimeType: type || 'audio/wav' };
+}
+
+/**
  * Sends audio to server /api/transcribe
  */
 export async function transcribeAudio(
@@ -43,8 +147,8 @@ export async function transcribeAudio(
   options: TranscribeOptions = {}
 ): Promise<TranscribeResult> {
   try {
-    const audioBase64 = await blobToBase64(blob);
-    const mimeType = blob.type || 'audio/wav';
+    const { blob: optimizedBlob, mimeType } = await optimizeAudioForTranscription(blob);
+    const audioBase64 = await blobToBase64(optimizedBlob);
 
     const response = await fetch('/api/transcribe', {
       method: 'POST',
@@ -123,7 +227,7 @@ export function downloadTranscriptSrt(filename: string, text: string, segments?:
   if (segments && segments.length > 0) {
     segments.forEach((seg, idx) => {
       const startTime = seg.time ? convertTimestampToSrt(seg.time) : '00:00:00,000';
-      const endTime = '00:00:05,000'; // fallback duration segment
+      const endTime = '00:00:05,000';
       srtContent += `${idx + 1}\n${startTime} --> ${endTime}\n${seg.speaker ? `${seg.speaker}: ` : ''}${seg.text}\n\n`;
     });
   } else {

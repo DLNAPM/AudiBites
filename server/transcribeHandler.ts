@@ -36,6 +36,54 @@ export interface TranscribeResponsePayload {
   error?: string;
 }
 
+/**
+ * Sniffs the MIME type from the first few bytes of base64 data if possible.
+ */
+function detectMimeType(audioBase64: string, fallbackMime: string = 'audio/wav'): string {
+  try {
+    const headChunk = audioBase64.slice(0, 64);
+    const buf = Buffer.from(headChunk, 'base64');
+    if (buf.length >= 4) {
+      // RIFF....WAVE
+      if (buf.toString('ascii', 0, 4) === 'RIFF') {
+        return 'audio/wav';
+      }
+      // ID3 or MP3 sync frame (0xFF 0xFB, 0xFF 0xF3, 0xFF 0xF2, 0xFF 0xE3)
+      if (buf.toString('ascii', 0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) {
+        return 'audio/mp3';
+      }
+      // OggS
+      if (buf.toString('ascii', 0, 4) === 'OggS') {
+        return 'audio/ogg';
+      }
+      // fLaC
+      if (buf.toString('ascii', 0, 4) === 'fLaC') {
+        return 'audio/flac';
+      }
+      // EBML (WebM) 0x1A 0x45 0xDF 0xA3
+      if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
+        return 'audio/webm';
+      }
+      // ISO/IEC 14496-12 (M4A/MP4 ftyp)
+      if (buf.length >= 8 && buf.toString('ascii', 4, 8) === 'ftyp') {
+        return 'audio/mp4';
+      }
+    }
+  } catch {
+    // Ignore sniffing errors
+  }
+
+  let clean = (fallbackMime || 'audio/wav').toLowerCase();
+  if (clean.includes(';')) {
+    clean = clean.split(';')[0].trim();
+  }
+  if (clean === 'audio/mpeg') return 'audio/mp3';
+  if (clean === 'audio/x-wav' || clean === 'audio/wave') return 'audio/wav';
+  if (clean === 'audio/x-m4a' || clean === 'audio/aac') return 'audio/aac';
+  if (clean.startsWith('audio/') || clean.startsWith('video/')) return clean;
+  return 'audio/wav';
+}
+
 function parseErrorMessage(err: any): string {
   if (!err) return 'Transcription failed.';
   const msg = typeof err === 'string' ? err : err.message || JSON.stringify(err);
@@ -46,7 +94,7 @@ function parseErrorMessage(err: any): string {
         return 'The transcription service is currently experiencing high demand. Please try again shortly.';
       }
       if (parsed.error.code === 429) {
-        return 'Transcription rate limit exceeded. Please wait a moment before trying again.';
+        return 'Transcription rate limit reached. Please wait a few moments and try again.';
       }
       return parsed.error.message;
     }
@@ -55,6 +103,9 @@ function parseErrorMessage(err: any): string {
   }
   if (msg.includes('503') || msg.includes('high demand') || msg.includes('UNAVAILABLE')) {
     return 'The transcription service is currently experiencing high demand. Please try again shortly.';
+  }
+  if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+    return 'Transcription rate limit reached. Please wait a few moments and try again.';
   }
   return msg;
 }
@@ -71,59 +122,54 @@ export async function handleTranscription(payload: TranscribeRequestPayload): Pr
     throw new Error('No audio data provided for transcription.');
   }
 
-  // Strip any data: URL scheme prefix
+  // Strip any data: URL scheme prefix and whitespace
   if (audioBase64.includes(',')) {
     audioBase64 = audioBase64.split(',')[1];
   }
   audioBase64 = audioBase64.replace(/\s+/g, '');
 
+  const cleanMimeType = detectMimeType(audioBase64, mimeType);
   const ai = getAiClient();
 
-  // Normalize mime type
-  let cleanMimeType = (mimeType || 'audio/wav').toLowerCase();
-  if (cleanMimeType.includes(';')) {
-    cleanMimeType = cleanMimeType.split(';')[0].trim();
-  }
-  if (!cleanMimeType.startsWith('audio/') && !cleanMimeType.startsWith('video/')) {
-    cleanMimeType = 'audio/wav';
-  }
+  // Instruction prompt
+  let promptText = `You are a high-accuracy automated speech-to-text transcription engine.
+The attached input is an audio recording.
+Carefully listen to the attached audio recording and transcribe all spoken dialogue and words accurately and verbatim.
 
-  let promptText = `You are a professional audio transcriptionist and audio engineer. 
-Carefully listen to this audio recording and transcribe it accurately.
-Guidelines:
-- Transcribe verbatim while cleaning up false starts unless context is crucial.
-- Maintain appropriate punctuation, capitalization, and paragraph spacing.
-- If multiple speakers are speaking, label them clearly (e.g. Speaker 1, Speaker 2, or by name if introduced).
-- If background sounds, music, or key audio events occur, note them in brackets (e.g. [Upbeat acoustic guitar intro], [Applause], [Silence]).`;
+Strict Output Rules:
+- Output ONLY the transcription text.
+- Do NOT provide conversational filler (e.g. do not say "Here is the transcription", "Certainly", or ask for links/files).
+- Maintain proper capitalization, punctuation, and paragraph breaks.
+- If multiple speakers are detected, prefix their lines with speaker labels (e.g., Speaker 1, Speaker 2, or by name if introduced).
+- If the audio contains only music, instrumental sounds, or sound effects with no spoken words, describe the audio in brackets, for example: "[Instrumental music with upbeat acoustic guitar and percussion - No spoken words detected]".`;
 
   if (mode === 'timestamped') {
-    promptText += `\n- Format the transcript with timestamps at the beginning of each major sentence or phrase in brackets, e.g.:
-[00:00] Speaker 1: Hello and welcome to today's session.
-[00:05] Speaker 2: Thanks for having me.`;
+    promptText += `\n- Format the transcript with timestamps at the beginning of each major phrase or sentence, e.g.:
+[00:00] Speaker 1: Hello and welcome to today's recording.
+[00:04] Speaker 2: Great to be here.`;
   } else if (mode === 'summary') {
-    promptText += `\n\nIn addition to the full verbatim transcript, please provide an Executive Summary and Key Takeaways section at the top formatted in markdown:
+    promptText += `\n- Format your output with an Executive Summary and Key Takeaways at the top:
 # Executive Summary
-[Brief overview of what was discussed or heard]
+[Brief 2-3 sentence overview of the conversation or topic]
 
 ### Key Highlights
-- Bullet point 1
-- Bullet point 2
+- Key highlight 1
+- Key highlight 2
 
 ### Full Transcript
-[Verbatim transcript here]`;
+[Complete verbatim transcript]`;
   } else if (mode === 'translate') {
     const lang = targetLanguage || 'English';
-    promptText += `\n\nPlease transcribe the audio and translate the transcript into ${lang}.
-Provide both the original language transcription and the translated transcript:
+    promptText += `\n- Translate the spoken audio into ${lang}. Output format:
 # Translation (${lang})
 [Translated transcript here]
 
 ### Original Audio Transcript
-[Original transcript here]`;
+[Original spoken audio transcript here]`;
   }
 
   if (customPrompt && customPrompt.trim()) {
-    promptText += `\n\nAdditional user instructions:\n${customPrompt.trim()}`;
+    promptText += `\n\nAdditional user guidelines:\n${customPrompt.trim()}`;
   }
 
   const audioPart = {
@@ -151,7 +197,12 @@ Provide both the original language transcription and the translated transcript:
           },
         });
 
-        const rawText = response.text || '';
+        let rawText = (response.text || '').trim();
+
+        // If the model somehow returned empty text, provide a fallback
+        if (!rawText) {
+          rawText = '[Audio processed - No audible speech detected]';
+        }
 
         // Extract timestamps/segments if present
         const segments: Array<{ time?: string; speaker?: string; text: string }> = [];
@@ -183,7 +234,8 @@ Provide both the original language transcription and the translated transcript:
           errorMsg.includes('503') ||
           errorMsg.includes('UNAVAILABLE') ||
           errorMsg.includes('high demand') ||
-          errorMsg.includes('429');
+          errorMsg.includes('429') ||
+          errorMsg.includes('RESOURCE_EXHAUSTED');
 
         if (attempt < attempts && isTransient) {
           await sleep(800 * attempt);
