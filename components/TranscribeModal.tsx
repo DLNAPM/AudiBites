@@ -384,11 +384,22 @@ const TranscribeModal: React.FC<TranscribeModalProps> = ({
             </button>
           </div>
 
-          {/* Error Message */}
+          {/* Error Message with Retry */}
           {errorMessage && (
-            <div className="flex items-start gap-2.5 p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300">
-              <AlertCircle size={16} className="shrink-0 text-rose-400 mt-0.5" />
-              <span>{errorMessage}</span>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-rose-500/10 border border-rose-500/25 rounded-xl text-xs text-rose-200">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle size={16} className="shrink-0 text-rose-400 mt-0.5" />
+                <span className="leading-relaxed">{errorMessage}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleStartTranscription}
+                disabled={isLoading}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 rounded-lg text-xs font-semibold transition-colors"
+              >
+                <RefreshCw size={12} />
+                <span>Retry</span>
+              </button>
             </div>
           )}
 

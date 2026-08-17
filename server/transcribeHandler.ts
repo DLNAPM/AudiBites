@@ -36,6 +36,31 @@ export interface TranscribeResponsePayload {
   error?: string;
 }
 
+function parseErrorMessage(err: any): string {
+  if (!err) return 'Transcription failed.';
+  const msg = typeof err === 'string' ? err : err.message || JSON.stringify(err);
+  try {
+    const parsed = JSON.parse(msg);
+    if (parsed.error?.message) {
+      if (parsed.error.code === 503 || parsed.error.status === 'UNAVAILABLE') {
+        return 'The AI transcription service is currently experiencing high demand. Please retry in a few moments.';
+      }
+      if (parsed.error.code === 429) {
+        return 'Transcription rate limit exceeded. Please wait a moment before trying again.';
+      }
+      return parsed.error.message;
+    }
+  } catch {
+    // Not JSON
+  }
+  if (msg.includes('503') || msg.includes('high demand') || msg.includes('UNAVAILABLE')) {
+    return 'The AI transcription service is temporarily experiencing high demand. Please retry in a few moments.';
+  }
+  return msg;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function handleTranscription(payload: TranscribeRequestPayload): Promise<TranscribeResponsePayload> {
   let { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt } = payload;
 
@@ -109,39 +134,62 @@ Provide both the original language transcription and the translated transcript:
     text: promptText,
   };
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: {
-        parts: [audioPart, textPart],
-      },
-    });
+  // Attempt transcription with exponential backoff on transient errors
+  const maxRetries = 3;
+  let lastError: any = null;
 
-    const rawText = response.text || '';
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.7-flash',
+        contents: {
+          parts: [audioPart, textPart],
+        },
+      });
 
-    // Extract timestamps/segments if present
-    const segments: Array<{ time?: string; speaker?: string; text: string }> = [];
-    const lines = rawText.split('\n');
-    const timestampRegex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?:([^:]+):\s*)?(.*)/;
+      const rawText = response.text || '';
 
-    for (const line of lines) {
-      const match = line.match(timestampRegex);
-      if (match) {
-        segments.push({
-          time: match[1],
-          speaker: match[2]?.trim(),
-          text: match[3]?.trim() || line,
-        });
+      // Extract timestamps/segments if present
+      const segments: Array<{ time?: string; speaker?: string; text: string }> = [];
+      const lines = rawText.split('\n');
+      const timestampRegex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(?:([^:]+):\s*)?(.*)/;
+
+      for (const line of lines) {
+        const match = line.match(timestampRegex);
+        if (match) {
+          segments.push({
+            time: match[1],
+            speaker: match[2]?.trim(),
+            text: match[3]?.trim() || line,
+          });
+        }
       }
-    }
 
-    return {
-      success: true,
-      transcription: rawText,
-      segments: segments.length > 0 ? segments : undefined,
-    };
-  } catch (apiError: any) {
-    console.error('Gemini API generateContent error:', apiError);
-    throw new Error(apiError?.message || 'Gemini API failed to process the audio.');
+      return {
+        success: true,
+        transcription: rawText,
+        segments: segments.length > 0 ? segments : undefined,
+      };
+    } catch (apiError: any) {
+      lastError = apiError;
+      const errorMsg = apiError?.message || '';
+      console.warn(`Gemini API attempt ${attempt}/${maxRetries} error:`, errorMsg.slice(0, 200));
+
+      const isTransient =
+        errorMsg.includes('503') ||
+        errorMsg.includes('UNAVAILABLE') ||
+        errorMsg.includes('high demand') ||
+        errorMsg.includes('429');
+
+      if (attempt < maxRetries && isTransient) {
+        // Exponential backoff
+        await sleep(1000 * Math.pow(2, attempt - 1));
+        continue;
+      }
+      break;
+    }
   }
+
+  const humanReadableError = parseErrorMessage(lastError);
+  throw new Error(humanReadableError);
 }
