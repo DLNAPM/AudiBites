@@ -37,7 +37,7 @@ export interface TranscribeResponsePayload {
 }
 
 /**
- * Sniffs the MIME type from the first few bytes of base64 data if possible.
+ * Sniffs the MIME type from the first few bytes of base64 data.
  */
 function detectMimeType(audioBase64: string, fallbackMime: string = 'audio/wav'): string {
   try {
@@ -91,10 +91,10 @@ function parseErrorMessage(err: any): string {
     const parsed = JSON.parse(msg);
     if (parsed.error?.message) {
       if (parsed.error.code === 503 || parsed.error.status === 'UNAVAILABLE') {
-        return 'The transcription service is currently experiencing high demand. Please try again shortly.';
+        return 'The transcription service is temporarily busy. Please retry in a few moments.';
       }
-      if (parsed.error.code === 429) {
-        return 'Transcription rate limit reached. Please wait a few moments and try again.';
+      if (parsed.error.code === 429 || parsed.error.status === 'RESOURCE_EXHAUSTED') {
+        return 'Transcription rate limit reached. Please wait a moment and try again.';
       }
       return parsed.error.message;
     }
@@ -102,18 +102,23 @@ function parseErrorMessage(err: any): string {
     // Not JSON
   }
   if (msg.includes('503') || msg.includes('high demand') || msg.includes('UNAVAILABLE')) {
-    return 'The transcription service is currently experiencing high demand. Please try again shortly.';
+    return 'The transcription service is temporarily busy. Please retry in a few moments.';
   }
   if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
-    return 'Transcription rate limit reached. Please wait a few moments and try again.';
+    return 'Transcription rate limit reached. Please wait a moment and try again.';
   }
   return msg;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Candidate models in order of priority: modern fast models with fallback resilience
-const CANDIDATE_MODELS = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+// Candidate models in order of priority:
+// gemini-3.1-flash-lite has high availability, fast response time, and high audio transcription accuracy
+const CANDIDATE_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.7-flash',
+  'gemini-flash-latest',
+];
 
 export async function handleTranscription(payload: TranscribeRequestPayload): Promise<TranscribeResponsePayload> {
   let { audioBase64, mimeType = 'audio/wav', mode = 'standard', targetLanguage, customPrompt } = payload;
@@ -131,45 +136,41 @@ export async function handleTranscription(payload: TranscribeRequestPayload): Pr
   const cleanMimeType = detectMimeType(audioBase64, mimeType);
   const ai = getAiClient();
 
-  // Instruction prompt
-  let promptText = `You are a high-accuracy automated speech-to-text transcription engine.
-The attached input is an audio recording.
-Carefully listen to the attached audio recording and transcribe all spoken dialogue and words accurately and verbatim.
-
-Strict Output Rules:
-- Output ONLY the transcription text.
-- Do NOT provide conversational filler (e.g. do not say "Here is the transcription", "Certainly", or ask for links/files).
-- Maintain proper capitalization, punctuation, and paragraph breaks.
-- If multiple speakers are detected, prefix their lines with speaker labels (e.g., Speaker 1, Speaker 2, or by name if introduced).
-- If the audio contains only music, instrumental sounds, or sound effects with no spoken words, describe the audio in brackets, for example: "[Instrumental music with upbeat acoustic guitar and percussion - No spoken words detected]".`;
+  let promptInstruction = `Listen to the attached audio file and transcribe all spoken words directly into text.
+If there are multiple speakers, label them as Speaker 1, Speaker 2, etc.
+Maintain proper punctuation and formatting.
+If no spoken words are detected, output [No speech detected] or describe the audio sound in brackets.`;
 
   if (mode === 'timestamped') {
-    promptText += `\n- Format the transcript with timestamps at the beginning of each major phrase or sentence, e.g.:
-[00:00] Speaker 1: Hello and welcome to today's recording.
-[00:04] Speaker 2: Great to be here.`;
+    promptInstruction = `Listen to the attached audio file and transcribe all spoken words into text with timestamps in brackets at the beginning of each major phrase or sentence, for example:
+[00:00] Speaker 1: Hello and welcome to the show.
+[00:04] Speaker 2: Great to be here.
+If no speech is detected, output [No speech detected].`;
   } else if (mode === 'summary') {
-    promptText += `\n- Format your output with an Executive Summary and Key Takeaways at the top:
+    promptInstruction = `Listen to the attached audio file. Transcribe the audio and generate an Executive Summary, Key Highlights, and full transcript formatted as:
 # Executive Summary
-[Brief 2-3 sentence overview of the conversation or topic]
+[Brief 2-3 sentence overview]
 
 ### Key Highlights
 - Key highlight 1
 - Key highlight 2
 
 ### Full Transcript
-[Complete verbatim transcript]`;
+[Complete verbatim transcript]
+If no speech is detected, provide a summary of the audio contents and indicate [No speech detected].`;
   } else if (mode === 'translate') {
     const lang = targetLanguage || 'English';
-    promptText += `\n- Translate the spoken audio into ${lang}. Output format:
+    promptInstruction = `Listen to the attached audio file. Transcribe all spoken words and translate them into ${lang}:
 # Translation (${lang})
 [Translated transcript here]
 
 ### Original Audio Transcript
-[Original spoken audio transcript here]`;
+[Original spoken audio transcript here]
+If no speech is detected, output [No speech detected].`;
   }
 
   if (customPrompt && customPrompt.trim()) {
-    promptText += `\n\nAdditional user guidelines:\n${customPrompt.trim()}`;
+    promptInstruction += `\n\nAdditional user guidelines:\n${customPrompt.trim()}`;
   }
 
   const audioPart = {
@@ -180,26 +181,28 @@ Strict Output Rules:
   };
 
   const textPart = {
-    text: promptText,
+    text: promptInstruction,
   };
 
   let lastError: any = null;
 
   // Try candidate models with graceful fallback on high demand (503 / 429)
   for (const modelName of CANDIDATE_MODELS) {
-    const attempts = modelName === CANDIDATE_MODELS[0] ? 2 : 1;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
+    const maxAttemptsForModel = 2;
+    for (let attempt = 1; attempt <= maxAttemptsForModel; attempt++) {
       try {
         const response = await ai.models.generateContent({
           model: modelName,
-          contents: {
-            parts: [audioPart, textPart],
-          },
+          contents: [
+            {
+              parts: [audioPart, textPart],
+            },
+          ],
         });
 
         let rawText = (response.text || '').trim();
 
-        // If the model somehow returned empty text, provide a fallback
+        // If the model returned empty text, provide a sensible indicator
         if (!rawText) {
           rawText = '[Audio processed - No audible speech detected]';
         }
@@ -235,13 +238,14 @@ Strict Output Rules:
           errorMsg.includes('UNAVAILABLE') ||
           errorMsg.includes('high demand') ||
           errorMsg.includes('429') ||
-          errorMsg.includes('RESOURCE_EXHAUSTED');
+          errorMsg.includes('RESOURCE_EXHAUSTED') ||
+          errorMsg.includes('quota');
 
-        if (attempt < attempts && isTransient) {
-          await sleep(800 * attempt);
+        if (attempt < maxAttemptsForModel && isTransient) {
+          await sleep(600 * attempt);
           continue;
         }
-        // Move to next model in candidate list
+        // Fallback to next candidate model
         break;
       }
     }
