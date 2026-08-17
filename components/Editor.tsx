@@ -25,7 +25,6 @@ import {
   HelpCircle,
   Clock,
   FileText,
-  BookOpen,
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react';
@@ -88,6 +87,17 @@ const Editor: React.FC<EditorProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
 
+  // Synchronous Refs for Event Listeners (prevents stale closure issues)
+  const isLoopingRef = useRef<boolean>(isLooping);
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+  }, [isLooping]);
+
+  const activeRegionRef = useRef<Region | null>(activeRegion);
+  useEffect(() => {
+    activeRegionRef.current = activeRegion;
+  }, [activeRegion]);
+
   // Controls & Settings
   const [zoomLevel, setZoomLevel] = useState(50); // minPxPerSec
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -109,6 +119,43 @@ const Editor: React.FC<EditorProps> = ({
   const triggerLegend = (key: StudioButtonKey) => {
     setActiveLegendKey(key);
     setLastActionTimestamp(Date.now());
+  };
+
+  // Toggle Play / Pause with accurate Region Looping support
+  const togglePlayPause = useCallback(() => {
+    triggerLegend('play-pause');
+    if (!wavesurfer.current) return;
+
+    if (wavesurfer.current.isPlaying()) {
+      wavesurfer.current.pause();
+    } else {
+      const cur = wavesurfer.current.getCurrentTime();
+      const reg = activeRegionRef.current;
+      // If a region is active and looping is enabled (or region was selected), ensure cursor starts inside region
+      if (reg) {
+        if (cur < reg.start - 0.05 || cur >= reg.end - 0.05) {
+          wavesurfer.current.setTime(reg.start);
+        }
+      }
+      wavesurfer.current.play().catch(() => {});
+    }
+  }, []);
+
+  // Toggle Loop state
+  const handleToggleLoop = () => {
+    const next = !isLooping;
+    setIsLooping(next);
+    isLoopingRef.current = next;
+    triggerLegend('loop');
+
+    // If looping turned ON while audio is playing and there is an active region, seek into region if outside
+    if (next && activeRegionRef.current && wavesurfer.current?.isPlaying()) {
+      const cur = wavesurfer.current.getCurrentTime();
+      const reg = activeRegionRef.current;
+      if (cur < reg.start || cur >= reg.end) {
+        wavesurfer.current.setTime(reg.start);
+      }
+    }
   };
 
   // Initialize WaveSurfer & AudioContext
@@ -182,7 +229,21 @@ const Editor: React.FC<EditorProps> = ({
 
     ws.on('play', () => setIsPlaying(true));
     ws.on('pause', () => setIsPlaying(false));
-    ws.on('timeupdate', (time) => setCurrentTime(time));
+
+    // Timeupdate with robust frame-accurate looping
+    ws.on('timeupdate', (time) => {
+      setCurrentTime(time);
+      if (isLoopingRef.current && activeRegionRef.current && ws.isPlaying()) {
+        const reg = activeRegionRef.current;
+        if (time >= reg.end) {
+          ws.setTime(reg.start);
+          if (!ws.isPlaying()) {
+            ws.play().catch(() => {});
+          }
+        }
+      }
+    });
+
     ws.on('interaction', (time) => setCurrentTime(time));
 
     // Enable drag selection on waveform
@@ -195,23 +256,31 @@ const Editor: React.FC<EditorProps> = ({
         if (r.id !== region.id) r.remove();
       });
       setActiveRegion(region);
+      activeRegionRef.current = region;
       triggerLegend('region-select');
     });
 
     regs.on('region-updated', (region) => {
       setActiveRegion(region);
+      activeRegionRef.current = region;
       triggerLegend('region-select');
     });
 
     regs.on('region-clicked', (region, e) => {
       e.stopPropagation();
-      region.play();
+      setActiveRegion(region);
+      activeRegionRef.current = region;
+      ws.setTime(region.start);
+      ws.play().catch(() => {});
       triggerLegend('play-pause');
     });
 
     regs.on('region-out', (region) => {
-      if (isLooping) {
-        region.play();
+      if (isLoopingRef.current && activeRegionRef.current?.id === region.id) {
+        ws.setTime(region.start);
+        if (!ws.isPlaying()) {
+          ws.play().catch(() => {});
+        }
       }
     });
 
@@ -277,6 +346,7 @@ const Editor: React.FC<EditorProps> = ({
     wavesurfer.current?.loadBlob(newBlob);
     regionsPlugin.current?.clearRegions();
     setActiveRegion(null);
+    activeRegionRef.current = null;
     setCurrentTime(0);
   };
 
@@ -297,6 +367,7 @@ const Editor: React.FC<EditorProps> = ({
       wavesurfer.current?.loadBlob(newBlob);
       regionsPlugin.current?.clearRegions();
       setActiveRegion(null);
+      activeRegionRef.current = null;
       setCurrentTime(0);
     }
   }, [historyIndex, history, audioContext]);
@@ -318,6 +389,7 @@ const Editor: React.FC<EditorProps> = ({
       wavesurfer.current?.loadBlob(newBlob);
       regionsPlugin.current?.clearRegions();
       setActiveRegion(null);
+      activeRegionRef.current = null;
       setCurrentTime(0);
     }
   }, [historyIndex, history, audioContext]);
@@ -330,8 +402,7 @@ const Editor: React.FC<EditorProps> = ({
 
       if (e.code === 'Space') {
         e.preventDefault();
-        triggerLegend('play-pause');
-        wavesurfer.current?.playPause();
+        togglePlayPause();
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
@@ -345,6 +416,7 @@ const Editor: React.FC<EditorProps> = ({
         triggerLegend('region-select');
         regionsPlugin.current?.clearRegions();
         setActiveRegion(null);
+        activeRegionRef.current = null;
       } else if (e.key === 't' && activeRegion) {
         triggerLegend('trim');
         handleTrim();
@@ -356,7 +428,7 @@ const Editor: React.FC<EditorProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, activeRegion]);
+  }, [handleUndo, handleRedo, activeRegion, togglePlayPause]);
 
   // Tool Operations
   const handleTrim = () => {
@@ -466,11 +538,15 @@ const Editor: React.FC<EditorProps> = ({
     if (key === 'start') {
       const newStart = Math.max(0, Math.min(value, activeRegion.end - 0.05));
       activeRegion.setOptions({ start: newStart });
-      setActiveRegion({ ...activeRegion, start: newStart } as any);
+      const updated = { ...activeRegion, start: newStart } as any;
+      setActiveRegion(updated);
+      activeRegionRef.current = updated;
     } else {
       const newEnd = Math.min(totalDuration, Math.max(value, activeRegion.start + 0.05));
       activeRegion.setOptions({ end: newEnd });
-      setActiveRegion({ ...activeRegion, end: newEnd } as any);
+      const updated = { ...activeRegion, end: newEnd } as any;
+      setActiveRegion(updated);
+      activeRegionRef.current = updated;
     }
   };
 
@@ -628,19 +704,16 @@ const Editor: React.FC<EditorProps> = ({
 
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => {
-                    setIsLooping(!isLooping);
-                    triggerLegend('loop');
-                  }}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
+                  onClick={handleToggleLoop}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all font-medium ${
                     isLooping
-                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                      : 'hover:bg-slate-900 text-slate-400'
+                      ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/20'
+                      : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
                   }`}
-                  title="Loop playback in selected region"
+                  title="Loop playback inside the selected region"
                 >
-                  <Repeat size={13} />
-                  <span>Loop Region</span>
+                  <Repeat size={13} className={isLooping ? 'animate-spin-slow' : ''} />
+                  <span>Loop Region: {isLooping ? 'ON' : 'OFF'}</span>
                 </button>
 
                 <button
@@ -695,6 +768,7 @@ const Editor: React.FC<EditorProps> = ({
                     triggerLegend('region-select');
                     regionsPlugin.current?.clearRegions();
                     setActiveRegion(null);
+                    activeRegionRef.current = null;
                   }}
                   className="text-[11px] text-slate-500 hover:text-slate-300 underline"
                 >
@@ -785,10 +859,7 @@ const Editor: React.FC<EditorProps> = ({
                 <RotateCcw size={16} />
               </button>
               <button
-                onClick={() => {
-                  triggerLegend('play-pause');
-                  wavesurfer.current?.playPause();
-                }}
+                onClick={togglePlayPause}
                 className="w-11 h-11 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex items-center justify-center shadow-md shadow-sky-500/20 transition-all active:scale-95"
                 title="Play/Pause (Space)"
               >
